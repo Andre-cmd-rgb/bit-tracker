@@ -26,21 +26,21 @@ func (m *Model) viewDashboard() string {
 
 func (m *Model) dashLeft(w, h int) string {
 	pet := ui.RenderPet(m.petState, m.petFrame)
-	mood := "no mood yet"
+	mood := ui.StyleMuted.Render("no mood logged yet")
 	if m.todayMood != nil {
-		mood = fmt.Sprintf("mood: %d/5", m.todayMood.Score)
+		style := lipgloss.NewStyle().Foreground(ui.MoodColor(m.todayMood.Score)).Bold(true)
+		mood = style.Render(fmt.Sprintf("mood %d/5", m.todayMood.Score))
 		if m.todayMood.Note != "" {
-			mood += " — " + trunc(m.todayMood.Note, w-12)
+			mood += " " + ui.StyleMuted.Render("— "+trunc(m.todayMood.Note, w-16))
 		}
 	}
 	body := lipgloss.JoinVertical(lipgloss.Left,
-		ui.StyleTitle.Render("Bit"),
+		ui.StyleSectionHead.Render("Bit"),
+		lipgloss.PlaceHorizontal(w-6, lipgloss.Center, pet),
 		"",
-		pet,
-		"",
-		ui.StyleMuted.Render("state: "+ui.PetLabel(m.petState)),
+		ui.StyleMuted.Render("state: ")+lipgloss.NewStyle().Foreground(ui.ColorPrimary).Render(ui.PetLabel(m.petState)),
 		mood,
-		ui.StyleGold.Render(fmt.Sprintf("streak: %d days", m.streak)),
+		ui.StyleGold.Render(fmt.Sprintf("🔥 streak: %d days", m.streak)),
 	)
 	return ui.StylePanel.Width(w - 2).Height(h - 2).Render(body)
 }
@@ -48,24 +48,24 @@ func (m *Model) dashLeft(w, h int) string {
 func (m *Model) dashCenter(w, h int) string {
 	top := topActiveGoals(m.goals, 5)
 	var lines []string
-	lines = append(lines, ui.StyleTitle.Render("Top Goals"))
-	lines = append(lines, "")
-	barW := w - 14
+	lines = append(lines, ui.StyleSectionHead.Render("Top Goals"))
+	barW := w - 18
 	if barW < 8 {
 		barW = 8
 	}
 	for _, g := range top {
 		color := ui.CategoryColor(g.Category)
 		bar := ui.ProgressBar(g.Progress, barW, color)
-		line := fmt.Sprintf("%-18s %s %3d%%", trunc(g.Title, 18), bar, g.Progress)
+		dot := lipgloss.NewStyle().Foreground(color).Render("●")
+		line := fmt.Sprintf("%s %-14s %s %3d%%", dot, trunc(g.Title, 14), bar, g.Progress)
 		lines = append(lines, line)
 	}
 	if len(top) == 0 {
 		lines = append(lines, ui.StyleMuted.Render("press 2 to add your first goal"))
 	}
 	lines = append(lines, "")
-	lines = append(lines, ui.StyleTitle.Render("30-day completion"))
-	lines = append(lines, ui.Sparkline(m.dailyCompletion(30), w-4))
+	lines = append(lines, ui.StyleSectionHead.Render("30-day completion"))
+	lines = append(lines, lipgloss.NewStyle().Foreground(ui.ColorPrimary).Render(ui.Sparkline(m.dailyCompletion(30), w-6)))
 
 	body := strings.Join(lines, "\n")
 	return ui.StylePanel.Width(w - 2).Height(h - 2).Render(body)
@@ -73,21 +73,22 @@ func (m *Model) dashCenter(w, h int) string {
 
 func (m *Model) dashRight(w, h int) string {
 	var lines []string
-	lines = append(lines, ui.StyleTitle.Render("Journal"))
+	lines = append(lines, ui.StyleSectionHead.Render("Latest journal"))
 	if len(m.journal) > 0 {
 		j := m.journal[0]
-		lines = append(lines, ui.StyleMuted.Render(j.Date.Format("Jan 02")))
-		lines = append(lines, trunc(strings.ReplaceAll(j.Content, "\n", " "), (w-4)*3))
+		lines = append(lines, ui.StyleMuted.Render(j.Date.Format("Mon · Jan 02")))
+		lines = append(lines, trunc(strings.ReplaceAll(j.Content, "\n", " "), (w-6)*3))
 	} else {
 		lines = append(lines, ui.StyleMuted.Render("no entries yet"))
 	}
 	lines = append(lines, "")
-	lines = append(lines, ui.StyleTitle.Render("Deadlines"))
+	lines = append(lines, ui.StyleSectionHead.Render("Deadlines"))
 	count := 0
 	for _, g := range m.goals {
 		if g.TargetDate != nil && g.Status != "done" {
 			remaining := time.Until(*g.TargetDate).Hours() / 24
-			lines = append(lines, fmt.Sprintf("• %s (%.0fd)", trunc(g.Title, w-10), remaining))
+			badge := lipgloss.NewStyle().Foreground(ui.ColorGold).Render(fmt.Sprintf("%3.0fd", remaining))
+			lines = append(lines, fmt.Sprintf("• %s %s", trunc(g.Title, w-14), badge))
 			count++
 			if count >= 4 {
 				break
@@ -98,8 +99,8 @@ func (m *Model) dashRight(w, h int) string {
 		lines = append(lines, ui.StyleMuted.Render("none"))
 	}
 	lines = append(lines, "")
-	lines = append(lines, ui.StyleTitle.Render("Bit says"))
-	lines = append(lines, ui.StyleGold.Render(bitOneLiner(m)))
+	lines = append(lines, ui.StyleSectionHead.Render("Bit says"))
+	lines = append(lines, ui.StyleGold.Render("\"" + bitOneLiner(m) + "\""))
 
 	body := strings.Join(lines, "\n")
 	return ui.StylePanel.Width(w - 2).Height(h - 2).Render(body)

@@ -18,11 +18,16 @@ func (m *Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Text input modes capture most keys.
 	if m.mode != ModeNormal {
+		if m.mode == ModeSettingsInput {
+			return m.settingsKey(k)
+		}
 		return m.modeKey(k)
 	}
 
 	switch k.String() {
-	case "ctrl+c", "q":
+	case "ctrl+c":
+		return m, tea.Quit
+	case "q":
 		if m.view != ViewChat && m.view != ViewJournal {
 			return m, tea.Quit
 		}
@@ -41,8 +46,20 @@ func (m *Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.view = ViewChat
 		m.chatInput.Focus()
 		return m, nil
-	case "ctrl+c":
-		return m, tea.Quit
+	case "6":
+		m.view = ViewSettings
+	case "tab", "shift+right":
+		m.view = nextView(m.view, 1)
+		if m.view == ViewChat {
+			m.chatInput.Focus()
+		}
+		return m, nil
+	case "shift+tab", "shift+left":
+		m.view = nextView(m.view, -1)
+		if m.view == ViewChat {
+			m.chatInput.Focus()
+		}
+		return m, nil
 	}
 
 	switch m.view {
@@ -54,6 +71,8 @@ func (m *Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.journalKey(k)
 	case ViewChat:
 		return m.chatKey(k)
+	case ViewSettings:
+		return m.settingsKey(k)
 	}
 	return m, nil
 }
@@ -244,8 +263,11 @@ func (m *Model) chatKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.view = ViewDashboard
 		return m, nil
 	case "enter":
+		if m.streaming {
+			return m, toastCmd("wait — Bit is still replying")
+		}
 		text := strings.TrimSpace(m.chatInput.Value())
-		if text == "" || m.streaming {
+		if text == "" {
 			return m, nil
 		}
 		m.chatInput.SetValue("")
@@ -253,9 +275,24 @@ func (m *Model) chatKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c":
 		return m, tea.Quit
 	}
+	if m.streaming {
+		// swallow other keys so input appears locked
+		return m, nil
+	}
 	var cmd tea.Cmd
 	m.chatInput, cmd = m.chatInput.Update(k)
 	return m, cmd
+}
+
+// nextView cycles to the next navigable view, skipping first-run.
+func nextView(v View, dir int) View {
+	for i, nv := range NavViews {
+		if nv == v {
+			idx := (i + dir + len(NavViews)) % len(NavViews)
+			return NavViews[idx]
+		}
+	}
+	return NavViews[0]
 }
 
 func (m *Model) modeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {

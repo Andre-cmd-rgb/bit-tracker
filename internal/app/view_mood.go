@@ -61,19 +61,19 @@ func (m *Model) viewMood() string {
 	}
 
 	body := lipgloss.JoinVertical(lipgloss.Left,
-		ui.StyleTitle.Render("How are you today?"),
+		ui.StyleSectionHead.Render("How are you today?"),
 		"",
 		cellsRow,
 		"",
 		hint,
 		"",
-		ui.StyleTitle.Render("weekly"),
+		ui.StyleSectionHead.Render("weekly"),
 		sparkWeek,
 		"",
-		ui.StyleTitle.Render("30-day trend"),
+		ui.StyleSectionHead.Render("30-day trend"),
 		lg,
 		"",
-		ui.StyleTitle.Render("calendar"),
+		ui.StyleSectionHead.Render("calendar"),
 		cal,
 	)
 

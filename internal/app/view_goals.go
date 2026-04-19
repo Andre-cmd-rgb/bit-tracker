@@ -138,7 +138,7 @@ func (m *Model) goalsRightPanel(w, h int) string {
 	velocity := ui.BarChart(wlabels, wvals, w-6, ui.ColorGold)
 
 	meta := []string{
-		ui.StyleTitle.Render(g.Title),
+		ui.StyleSectionHead.Render(g.Title),
 		ui.StyleMuted.Render("category: " + g.Category),
 		ui.StyleMuted.Render("created: " + g.CreatedAt.Format("2006-01-02")),
 	}
@@ -153,9 +153,9 @@ func (m *Model) goalsRightPanel(w, h int) string {
 	}
 
 	body := strings.Join(meta, "\n") + "\n\n" +
-		ui.StyleTitle.Render("progress timeline") + "\n" + lg + "\n" +
-		ui.StyleTitle.Render("by category") + "\n" + bar + "\n\n" +
-		ui.StyleTitle.Render("weekly velocity") + "\n" + velocity
+		ui.StyleSectionHead.Render("progress timeline") + "\n" + lg + "\n" +
+		ui.StyleSectionHead.Render("by category") + "\n" + bar + "\n\n" +
+		ui.StyleSectionHead.Render("weekly velocity") + "\n" + velocity
 	return ui.StylePanel.Width(w - 2).Height(h - 2).Render(body)
 }
 

@@ -29,8 +29,12 @@ const (
 	ViewMood
 	ViewJournal
 	ViewChat
+	ViewSettings
 	ViewFirstRun
 )
+
+// NavViews are the views exposed in the top tab bar (first-run excluded).
+var NavViews = []View{ViewDashboard, ViewGoals, ViewMood, ViewJournal, ViewChat, ViewSettings}
 
 type Mode int
 
@@ -42,6 +46,7 @@ const (
 	ModeJournalEdit
 	ModeMoodNote
 	ModeGoalFilter
+	ModeSettingsInput
 )
 
 type GoalSubTab int
@@ -104,6 +109,9 @@ type Model struct {
 	send       func(tea.Msg)
 
 	progressCh chan ai.DownloadProgress
+
+	// settings view
+	settingsIdx settingsCursor
 }
 
 type firstRunState struct {
@@ -170,6 +178,7 @@ func (m *Model) Init() tea.Cmd {
 		loadStreak(m.store),
 	}
 	if m.cfg.FirstRunDone && m.runtime.Available() {
+		m.aiStatus = "starting"
 		cmds = append(cmds, startRuntime(m.runtime))
 	}
 	return tea.Batch(cmds...)
@@ -296,44 +305,62 @@ func (m *Model) View() string {
 		body = m.viewJournal()
 	case ViewChat:
 		body = m.viewChat()
+	case ViewSettings:
+		body = m.viewSettings()
 	}
 	status := m.renderStatus()
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, status)
 }
 
 func (m *Model) renderHeader() string {
-	tabs := []string{"1 Dashboard", "2 Goals", "3 Mood", "4 Journal", "5 Bit"}
+	tabs := []string{
+		"1·Dashboard",
+		"2·Goals",
+		"3·Mood",
+		"4·Journal",
+		"5·Bit",
+		"6·Settings",
+	}
 	var parts []string
 	for i, t := range tabs {
+		label := " " + t + " "
 		if int(m.view) == i {
-			parts = append(parts, ui.StyleTabActive.Render(t))
+			parts = append(parts, ui.StyleTabActive.Render(label))
 		} else {
-			parts = append(parts, ui.StyleTabInactive.Render(t))
+			parts = append(parts, ui.StyleTabInactive.Render(label))
 		}
 	}
 	left := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
-	right := ui.StyleGold.Render("bit-tracker")
+	right := ui.StyleGold.Render(" bit-tracker ")
 	space := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if space < 1 {
 		space = 1
 	}
-	return left + strings.Repeat(" ", space) + right
+	bar := left + strings.Repeat(" ", space) + right
+	sep := lipgloss.NewStyle().Foreground(ui.ColorBorder).Render(strings.Repeat("─", m.width))
+	return bar + "\n" + sep
 }
 
 func (m *Model) renderStatus() string {
-	keys := "[1-5] view  [q] quit"
+	keys := "tab/←→ switch · 1-6 jump · q quit"
 	switch m.view {
 	case ViewGoals:
-		keys = "[n]ew [e]dit [d]el [+/-] prog [c]omplete [t] todos [/] filter"
+		keys = "↑↓ select · n new · e edit · d del · +/- prog · c done · t todos · / filter"
 	case ViewMood:
-		keys = "[1-5] score [enter] log [n]ote"
+		keys = "1-5 score · enter log · n note"
 	case ViewJournal:
-		keys = "[n]ew [enter] edit [esc] save [ctrl+b] reflect"
+		keys = "↑↓ select · n new · enter open · esc save · ctrl+b reflect"
 	case ViewChat:
-		keys = "[enter] send  [esc] back"
+		if m.streaming {
+			keys = "Bit is typing... · esc back"
+		} else {
+			keys = "type & enter to send · esc back"
+		}
+	case ViewSettings:
+		keys = "↑↓ select · enter activate · esc cancel"
 	}
 	if m.mode != ModeNormal {
-		keys = "[enter] ok  [esc] cancel"
+		keys = "enter ok · esc cancel"
 	}
 	sb := ui.StatusBar{
 		Width:   m.width,
@@ -364,6 +391,8 @@ func viewName(v View) string {
 		return "Journal"
 	case ViewChat:
 		return "Bit"
+	case ViewSettings:
+		return "Settings"
 	}
 	return ""
 }

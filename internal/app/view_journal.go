@@ -17,7 +17,7 @@ func (m *Model) viewJournal() string {
 	rightW := w - leftW
 
 	var list []string
-	list = append(list, ui.StyleTitle.Render("Entries"))
+	list = append(list, ui.StyleSectionHead.Render("Entries"))
 	list = append(list, "")
 	if len(m.journal) == 0 {
 		list = append(list, ui.StyleMuted.Render("press n for a new entry"))
@@ -45,11 +45,11 @@ func (m *Model) viewJournal() string {
 func (m *Model) journalEditor(w int) string {
 	var header string
 	if m.mode == ModeJournalEdit {
-		header = ui.StyleTitle.Render("editing — esc saves, ctrl+b reflects")
+		header = ui.StyleSectionHead.Render("editing — esc saves, ctrl+b reflects")
 		m.textArea.SetWidth(w)
 		return header + "\n" + m.textArea.View()
 	}
-	header = ui.StyleTitle.Render("read")
+	header = ui.StyleSectionHead.Render("read")
 	if len(m.journal) == 0 {
 		return header + "\n\n" + ui.StyleMuted.Render("no entries yet")
 	}

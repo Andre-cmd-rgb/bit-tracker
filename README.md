@@ -21,15 +21,20 @@ works. Zero CGO, pure Go throughout.
 
 ## Keybindings
 
-| View            | Keys                                                     |
-|-----------------|----------------------------------------------------------|
-| Global          | `1`–`5` switch views · `q` quit                          |
-| Goals           | `n` new · `e` edit · `d` delete · `+`/`-` ±5% · `c` 100% |
-|                 | `/` filter · `t` toggle Todos sub-tab                    |
-| Todos (in Goals)| `n` new · `Space` toggle · `p` priority · `d` delete     |
-| Mood            | `1`–`5` score · `Enter` log · `n` add note               |
-| Journal         | `n` new · `Enter` open · `Esc` save · `Ctrl+B` reflect   |
-| Bit Chat        | type & `Enter` · `Esc` back                              |
+| View            | Keys                                                        |
+|-----------------|-------------------------------------------------------------|
+| Global          | `1`–`6` jump · `Tab`/`Shift+Tab` or `Shift+←/→` cycle views |
+|                 | `q` quit (except inside Chat/Journal edit)                  |
+| Goals           | `↑/↓` select · `n` new · `e` edit · `d` delete             |
+|                 | `+`/`-` ±5% · `c` complete · `/` filter · `t` Todos sub-tab |
+| Todos (in Goals)| `↑/↓` select · `n` new · `Space` toggle · `p` priority     |
+|                 | `d` delete                                                  |
+| Mood            | `1`–`5` score · `Enter` log · `n` add note                 |
+| Journal         | `↑/↓` select · `n` new · `Enter` open · `Esc` save         |
+|                 | `Ctrl+B` send entry to Bit for reflection                   |
+| Bit Chat        | type & `Enter` send · input locks while Bit is replying     |
+|                 | `Esc` back                                                  |
+| Settings        | `↑/↓` select · `Enter` activate                             |
 
 ## Config
 

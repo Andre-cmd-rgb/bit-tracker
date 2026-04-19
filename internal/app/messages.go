@@ -61,7 +61,7 @@ type actionAppliedMsg struct{ summary string }
 // Commands
 
 func tick() tea.Cmd {
-	return tea.Tick(1500*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
+	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
 func toastCmd(text string) tea.Cmd {

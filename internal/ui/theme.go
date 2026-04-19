@@ -34,11 +34,11 @@ var (
 	StylePanel = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(ColorBorder).
-			Padding(0, 1)
+			Padding(1, 2)
 	StylePanelActive = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(ColorPrimary).
-				Padding(0, 1)
+				Padding(1, 2)
 	StyleTabActive = lipgloss.NewStyle().
 			Foreground(ColorBG).
 			Background(ColorPrimary).
@@ -52,6 +52,14 @@ var (
 			Background(ColorSurface).
 			Padding(0, 1)
 	StyleError = lipgloss.NewStyle().Foreground(ColorDanger).Bold(true)
+
+	StyleSectionHead = lipgloss.NewStyle().
+				Foreground(ColorPrimary).
+				Bold(true).
+				Border(lipgloss.Border{Bottom: "─"}, false, false, true, false).
+				BorderForeground(ColorBorder).
+				MarginBottom(1).
+				PaddingBottom(0)
 )
 
 func CategoryColor(c string) lipgloss.Color {
