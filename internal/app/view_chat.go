@@ -65,13 +65,11 @@ func (m *Model) viewChat() string {
 		}
 		modeLine = append(modeLine, style.Render(mode))
 	}
-
 	header := lipgloss.JoinVertical(lipgloss.Left,
 		ui.Title.Render("chat")+"   "+toneBadge+"   "+modelBadge,
 		strings.Join(modeLine, " "),
 	)
 
-	// Messages — show last N that fit.
 	maxMessages := 6
 	start := 0
 	if len(m.chat) > maxMessages {
@@ -88,7 +86,7 @@ func (m *Model) viewChat() string {
 		case "user":
 			role = ui.Acc.Render("you")
 		case "ai":
-			role = ui.Good.Render("bit-tracker [" + msg.mode + "]")
+			role = ui.Good.Render("bit [" + msg.mode + "]")
 		default:
 			role = ui.Warn.Render("system")
 		}
@@ -105,12 +103,9 @@ func (m *Model) viewChat() string {
 	} else {
 		input = ui.Muted.Render("press i to type a prompt")
 	}
-
 	return lipgloss.JoinVertical(lipgloss.Left,
-		header,
-		"",
-		body.String(),
-		"",
+		header, "",
+		body.String(), "",
 		input,
 	)
 }

@@ -1,8 +1,15 @@
 // Package app is the Bubble Tea model that wires every view together.
+//
+// The UI is organised as three top-level tabs — landing, diary, chat — plus
+// four transient overlays (settings, export, models, entry detail). The model
+// keeps all state here; individual view_*.go files contribute rendering and
+// key-handling helpers for that tab or overlay.
 package app
 
 import (
+	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,65 +20,98 @@ import (
 
 	"github.com/andre-cmd-rgb/bit-tracker/internal/ai"
 	"github.com/andre-cmd-rgb/bit-tracker/internal/diary"
+	"github.com/andre-cmd-rgb/bit-tracker/internal/download"
 	"github.com/andre-cmd-rgb/bit-tracker/internal/recap"
+	"github.com/andre-cmd-rgb/bit-tracker/internal/settings"
 	"github.com/andre-cmd-rgb/bit-tracker/internal/ui"
 )
 
+// View is a top-level tab.
 type View int
 
 const (
-	ViewToday View = iota
-	ViewHistory
+	ViewLanding View = iota
+	ViewDiary
 	ViewChat
-	ViewExport
-	ViewWrapped
 )
 
-var viewNames = []string{"today", "history", "chat", "export", "wrapped"}
+var viewNames = []string{"landing", "diary", "chat"}
+
+// Overlay is a modal laid over the active tab.
+type Overlay int
+
+const (
+	OverlayNone Overlay = iota
+	OverlaySettings
+	OverlayExport
+	OverlayModels
+	OverlayEntry
+	OverlayHelp
+)
+
+// diarySub is the sub-mode within the diary tab.
+type diarySub int
+
+const (
+	diaryToday diarySub = iota
+	diaryHistory
+	diarySearch
+)
 
 type Config struct {
 	DataDir   string
 	ExportDir string
-	ModelPath string
+	ModelDir  string // where downloaded GGUFs live
+	ModelPath string // active model file path (may be empty)
 }
 
 type Model struct {
-	cfg    Config
-	repo   *diary.Repo
-	engine ai.Engine
+	cfg      Config
+	repo     *diary.Repo
+	engine   ai.Engine
+	settings *settings.Store
 
 	width, height int
 	view          View
+	overlay       Overlay
 	status        string
+	statusExpires time.Time
 
-	// today
-	today     diary.Entry
-	editing   bool
-	editor    textarea.Model
-	metaIdx   int // focused metadata field while not editing
-	meta      todayMeta
+	// today / diary
+	today      diary.Entry
+	editing    bool
+	editor     textarea.Model
+	meta       todayMeta
+	diarySub   diarySub
+	historyIdx int
+	search     textinput.Model
+	filter     string
+	filterTag  bool
+	filtered   []diary.Entry
+	detail     *diary.Entry
 
-	// history
-	history       []diary.Entry
-	historyIdx    int
-	historyMode   historyMode
-	searchInput   textinput.Model
-	activeFilter  string
-	filterIsTag   bool
-	viewingEntry  *diary.Entry
+	// history cache (all entries)
+	history []diary.Entry
 
 	// chat
 	chat       []chatMessage
 	chatInput  textinput.Model
-	chatMode   string // "rewrite" "reflect" "wake_up" "chat"
+	chatMode   string // "rewrite" | "reflect" | "wake_up" | "chat"
 	generating bool
+
+	// wrapped (lives inside landing footer)
+	summary recap.Summary
 
 	// export
 	exportIdx int
 
-	// wrapped
-	wrappedPeriod recap.Period
-	summary       recap.Summary
+	// settings overlay
+	settingsIdx int
+
+	// models overlay
+	modelsIdx    int
+	modelProg    map[string]download.Progress
+	modelCancels map[string]context.CancelFunc
 }
 
 type chatMessage struct {
@@ -81,14 +121,6 @@ type chatMessage struct {
 	time time.Time
 }
 
-type historyMode int
-
-const (
-	historyList historyMode = iota
-	historyView
-	historySearch
-)
-
 type todayMeta struct {
 	Mood, Study, Scroll, Project string
 	Tags                         string
@@ -96,7 +128,7 @@ type todayMeta struct {
 	Completed                    bool
 }
 
-func NewModel(cfg Config, repo *diary.Repo, engine ai.Engine) *Model {
+func NewModel(cfg Config, repo *diary.Repo, engine ai.Engine, store *settings.Store) *Model {
 	ta := textarea.New()
 	ta.Placeholder = "write…"
 	ta.Prompt = ""
@@ -106,25 +138,29 @@ func NewModel(cfg Config, repo *diary.Repo, engine ai.Engine) *Model {
 	ta.SetHeight(18)
 
 	si := textinput.New()
-	si.Placeholder = "search…"
+	si.Placeholder = "search entries or #tag…"
 	si.CharLimit = 120
 
 	ci := textinput.New()
 	ci.Placeholder = "ask bit-tracker…"
 	ci.CharLimit = 500
 
-	m := &Model{
-		cfg:           cfg,
-		repo:          repo,
-		engine:        engine,
-		view:          ViewToday,
-		editor:        ta,
-		searchInput:   si,
-		chatInput:     ci,
-		chatMode:      "chat",
-		wrappedPeriod: recap.PeriodWeek,
+	// Apply saved theme immediately so first paint uses the right palette.
+	ui.ApplyTheme(store.Get().ThemeName)
+
+	return &Model{
+		cfg:          cfg,
+		repo:         repo,
+		engine:       engine,
+		settings:     store,
+		view:         ViewLanding,
+		editor:       ta,
+		search:       si,
+		chatInput:    ci,
+		chatMode:     "chat",
+		modelProg:    map[string]download.Progress{},
+		modelCancels: map[string]context.CancelFunc{},
 	}
-	return m
 }
 
 func (m *Model) Init() tea.Cmd {
@@ -142,10 +178,8 @@ type todayLoadedMsg struct {
 	created bool
 }
 type historyLoadedMsg struct{ entries []diary.Entry }
-type entryViewMsg struct{ entry diary.Entry }
 type savedMsg struct{ entry diary.Entry }
 type errMsg struct{ err error }
-type statusMsg string
 type aiResultMsg struct {
 	mode string
 	text string
@@ -153,6 +187,7 @@ type aiResultMsg struct {
 }
 type modelLoadedMsg struct{ err error }
 type summaryMsg struct{ summary recap.Summary }
+type statusClearMsg struct{}
 
 // ---- commands ----
 
@@ -236,19 +271,25 @@ func (m *Model) computeSummary(period recap.Period) tea.Cmd {
 	}
 }
 
+func (m *Model) setStatus(s string) tea.Cmd {
+	m.status = s
+	m.statusExpires = time.Now().Add(4 * time.Second)
+	return tea.Tick(4*time.Second, func(time.Time) tea.Msg { return statusClearMsg{} })
+}
+
 // ---- Update ----
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		editorW := max(40, msg.Width-60) // leave room for the metrics card
+		editorW := max(40, msg.Width-60)
 		if msg.Width < 110 {
 			editorW = max(40, msg.Width-8)
 		}
 		m.editor.SetWidth(editorW)
-		m.editor.SetHeight(max(10, msg.Height-16))
-		m.searchInput.Width = max(20, msg.Width-20)
+		m.editor.SetHeight(max(10, msg.Height-18))
+		m.search.Width = max(20, msg.Width-20)
 		m.chatInput.Width = max(20, msg.Width-12)
 		return m, nil
 
@@ -258,21 +299,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.editor.CursorEnd()
 		m.syncMetaFromEntry()
 		if msg.created {
-			m.status = "new entry created for today"
+			return m, m.setStatus("new entry created for today")
 		}
 		return m, nil
 
 	case historyLoadedMsg:
 		m.history = msg.entries
+		m.filtered = nil
+		m.filter = ""
 		if m.historyIdx >= len(m.history) {
 			m.historyIdx = max(0, len(m.history)-1)
 		}
-		return m, m.computeSummary(m.wrappedPeriod)
+		return m, m.computeSummary(recap.PeriodWeek)
 
 	case savedMsg:
 		m.today = msg.entry
-		m.status = "saved"
-		return m, m.loadHistory()
+		return m, tea.Batch(m.loadHistory(), m.setStatus("saved"))
 
 	case summaryMsg:
 		m.summary = msg.summary
@@ -280,11 +322,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case modelLoadedMsg:
 		if msg.err != nil {
-			m.status = "model unavailable — running without AI"
-		} else {
-			m.status = "model loaded"
+			return m, m.setStatus("no model loaded — grounded stub active")
 		}
-		return m, nil
+		return m, m.setStatus("model loaded")
 
 	case aiResultMsg:
 		m.generating = false
@@ -296,9 +336,41 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case errMsg:
-		m.status = "error: " + msg.err.Error()
+	case downloadChunkMsg:
+		m.modelProg[msg.id] = msg.prog
+		if msg.prog.Done {
+			delete(m.modelCancels, msg.id)
+			if msg.prog.Err != nil {
+				return m, m.setStatus("download failed: " + msg.prog.Err.Error())
+			}
+			spec, _ := ai.FindModel(msg.id)
+			dest := filepath.Join(m.cfg.ModelDir, spec.Filename)
+			_ = m.settings.Update(func(s *settings.Settings) {
+				s.ActiveModel = spec.Filename
+			})
+			m.cfg.ModelPath = dest
+			return m, tea.Batch(m.setStatus("downloaded "+spec.Name), m.loadEngine())
+		}
+		if msg.ch != nil {
+			return m, waitProgress(msg.id, msg.ch)
+		}
 		return m, nil
+
+	case historyFilteredMsg:
+		m.filtered = msg.entries
+		if m.historyIdx >= len(m.filtered) {
+			m.historyIdx = 0
+		}
+		return m, nil
+
+	case statusClearMsg:
+		if time.Now().After(m.statusExpires) {
+			m.status = ""
+		}
+		return m, nil
+
+	case errMsg:
+		return m, m.setStatus("error: " + msg.err.Error())
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -307,13 +379,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Ctrl+C always exits, even when inputs are focused.
+	// Ctrl+C always quits.
 	if msg.Type == tea.KeyCtrlC {
 		return m, tea.Quit
 	}
 
-	// Text-input focus paths first.
-	if m.view == ViewToday && m.editing {
+	// Overlay owns input first.
+	if m.overlay != OverlayNone {
+		return m.handleOverlayKey(msg)
+	}
+
+	// Focused text inputs: the editor, search, chat input.
+	if m.view == ViewDiary && m.editing {
 		switch msg.String() {
 		case "esc":
 			m.editing = false
@@ -325,37 +402,35 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.editor, cmd = m.editor.Update(msg)
 		return m, cmd
 	}
-
-	if m.view == ViewHistory && m.historyMode == historySearch {
+	if m.view == ViewDiary && m.diarySub == diarySearch {
 		switch msg.String() {
 		case "esc":
-			m.historyMode = historyList
-			m.searchInput.Blur()
-			m.activeFilter = ""
-			m.filterIsTag = false
-			return m, m.loadHistory()
+			m.diarySub = diaryHistory
+			m.search.Blur()
+			m.filter = ""
+			m.filtered = nil
+			return m, nil
 		case "enter":
-			q := strings.TrimSpace(m.searchInput.Value())
-			m.historyMode = historyList
-			m.searchInput.Blur()
+			q := strings.TrimSpace(m.search.Value())
+			m.diarySub = diaryHistory
+			m.search.Blur()
 			if q == "" {
-				m.activeFilter = ""
-				return m, m.loadHistory()
+				m.filter = ""
+				m.filtered = nil
+				return m, nil
 			}
-			m.activeFilter = q
+			m.filter = q
 			if strings.HasPrefix(q, "#") {
-				tag := strings.TrimPrefix(q, "#")
-				m.filterIsTag = true
-				return m, m.searchHistory("", tag)
+				m.filterTag = true
+				return m, m.runSearch("", strings.TrimPrefix(q, "#"))
 			}
-			m.filterIsTag = false
-			return m, m.searchHistory(q, "")
+			m.filterTag = false
+			return m, m.runSearch(q, "")
 		}
 		var cmd tea.Cmd
-		m.searchInput, cmd = m.searchInput.Update(msg)
+		m.search, cmd = m.search.Update(msg)
 		return m, cmd
 	}
-
 	if m.view == ViewChat && m.chatInput.Focused() {
 		switch msg.String() {
 		case "esc":
@@ -378,51 +453,56 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	// Global shortcuts
+	// Global shortcuts.
 	switch msg.String() {
-	case "ctrl+c", "q":
+	case "q":
 		return m, tea.Quit
-	case "t":
-		m.view = ViewToday
+	case "1":
+		m.view = ViewLanding
+		return m, m.computeSummary(recap.PeriodWeek)
+	case "2":
+		m.view = ViewDiary
+		m.diarySub = diaryToday
 		return m, nil
-	case "h":
-		m.view = ViewHistory
-		return m, nil
-	case "c":
+	case "3":
 		m.view = ViewChat
 		return m, nil
-	case "e":
-		m.view = ViewExport
-		return m, nil
-	case "w":
-		m.view = ViewWrapped
-		return m, m.computeSummary(m.wrappedPeriod)
 	case "tab":
 		m.view = View((int(m.view) + 1) % len(viewNames))
-		if m.view == ViewWrapped {
-			return m, m.computeSummary(m.wrappedPeriod)
+		if m.view == ViewLanding {
+			return m, m.computeSummary(recap.PeriodWeek)
 		}
 		return m, nil
 	case "shift+tab":
 		m.view = View((int(m.view) + len(viewNames) - 1) % len(viewNames))
-		if m.view == ViewWrapped {
-			return m, m.computeSummary(m.wrappedPeriod)
+		if m.view == ViewLanding {
+			return m, m.computeSummary(recap.PeriodWeek)
 		}
+		return m, nil
+	case "s":
+		m.overlay = OverlaySettings
+		m.settingsIdx = 0
+		return m, nil
+	case "e":
+		m.overlay = OverlayExport
+		m.exportIdx = 0
+		return m, nil
+	case "d":
+		m.overlay = OverlayModels
+		m.modelsIdx = 0
+		return m, nil
+	case "?":
+		m.overlay = OverlayHelp
 		return m, nil
 	}
 
-	// Per-view keys
 	switch m.view {
-	case ViewToday:
-		return m.handleTodayKey(msg)
-	case ViewHistory:
-		return m.handleHistoryKey(msg)
+	case ViewLanding:
+		return m.handleLandingKey(msg)
+	case ViewDiary:
+		return m.handleDiaryKey(msg)
 	case ViewChat:
 		return m.handleChatKey(msg)
-	case ViewExport:
-		return m.handleExportKey(msg)
-	case ViewWrapped:
-		return m.handleWrappedKey(msg)
 	}
 	return m, nil
 }
@@ -434,16 +514,17 @@ func (m *Model) recentEntries(n int) []diary.Entry {
 	return append([]diary.Entry(nil), m.history[len(m.history)-n:]...)
 }
 
-func (m *Model) searchHistory(keyword, tag string) tea.Cmd {
+func (m *Model) runSearch(keyword, tag string) tea.Cmd {
 	return func() tea.Msg {
 		es, err := m.repo.Search(keyword, tag)
 		if err != nil {
 			return errMsg{err}
 		}
-		// repo.Search returns DESC; keep that ordering for list
-		return historyLoadedMsg{entries: reverse(es)}
+		return historyFilteredMsg{entries: reverse(es)}
 	}
 }
+
+type historyFilteredMsg struct{ entries []diary.Entry }
 
 // ---- View ----
 
@@ -455,51 +536,53 @@ func (m *Model) View() string {
 	footer := m.footer()
 	var body string
 	switch m.view {
-	case ViewToday:
-		body = m.viewToday()
-	case ViewHistory:
-		body = m.viewHistory()
+	case ViewLanding:
+		body = m.viewLanding()
+	case ViewDiary:
+		body = m.viewDiary()
 	case ViewChat:
 		body = m.viewChat()
-	case ViewExport:
-		body = m.viewExport()
-	case ViewWrapped:
-		body = m.viewWrapped()
 	}
-	return ui.Frame(m.width, m.height, header, body, footer)
+	base := ui.Frame(m.width, m.height, header, body, footer)
+	if m.overlay != OverlayNone {
+		inner := m.renderOverlay()
+		if inner != "" {
+			return ui.Overlay(m.width, m.height, inner)
+		}
+	}
+	return base
 }
 
 func (m *Model) header() string {
 	tabs := make([]string, 0, len(viewNames))
 	for i, name := range viewNames {
+		label := fmt.Sprintf("%d %s", i+1, name)
 		style := ui.Nav
 		if View(i) == m.view {
 			style = ui.NavActive
 		}
-		tabs = append(tabs, style.Render(name))
+		tabs = append(tabs, style.Render(label))
 	}
 	tone := diary.CurrentTone(m.history)
 	toneLabel := ""
 	switch tone {
 	case diary.ToneReflective:
-		toneLabel = "  " + ui.Dim.Render("· reflective tone")
+		toneLabel = "  " + ui.Dim.Render("· reflective")
 	case diary.ToneHarsh:
-		toneLabel = "  " + ui.Warn.Render("· harsh mode")
+		toneLabel = "  " + ui.Warn.Render("· harsh")
 	case diary.ToneIntervention:
 		toneLabel = "  " + ui.Warn.Render("· intervention")
 	}
-	model := ""
+	model := "  " + ui.Dim.Render("· no model")
 	if m.engine != nil && m.engine.Available() {
 		model = "  " + ui.Good.Render("· model on")
-	} else {
-		model = "  " + ui.Dim.Render("· no model")
 	}
 	left := ui.Title.Render("bit-tracker") +
 		"  " + ui.Dim.Render(strings.ToLower(time.Now().Format("Mon 02 Jan 2006"))) +
 		toneLabel + model
 	return lipgloss.JoinVertical(lipgloss.Left,
 		left,
-		strings.Join(tabs, " "),
+		strings.Join(tabs, "  "),
 		ui.HRule(m.width),
 	)
 }
@@ -507,20 +590,24 @@ func (m *Model) header() string {
 func (m *Model) footer() string {
 	var hints string
 	switch m.view {
-	case ViewToday:
-		if m.editing {
-			hints = "esc save & leave · ctrl+s save"
-		} else {
-			hints = "enter edit · r rewrite · m mood · s +15 study · p +15 project · o +15 scroll · x project done"
-		}
-	case ViewHistory:
-		switch m.historyMode {
-		case historySearch:
+	case ViewLanding:
+		hints = "1/2/3 tabs · s settings · e export · d models · ? help"
+	case ViewDiary:
+		switch m.diarySub {
+		case diarySearch:
 			hints = "enter search · esc cancel · # prefix = tag"
-		case historyView:
-			hints = "esc back · m markdown · H html"
+		case diaryHistory:
+			if m.detail != nil {
+				hints = "esc back · m markdown · H html"
+			} else {
+				hints = "↑/↓ move · enter open · / search · tab→chat · esc today"
+			}
 		default:
-			hints = "↑/↓ move · enter open · / search"
+			if m.editing {
+				hints = "esc save & leave · ctrl+s save"
+			} else {
+				hints = "enter edit · r rewrite · +/- mood · s settings · v history · p +15 project"
+			}
 		}
 	case ViewChat:
 		if m.chatInput.Focused() {
@@ -528,21 +615,18 @@ func (m *Model) footer() string {
 		} else {
 			hints = "i type · r rewrite · f reflect · u wake up · ctrl+l clear"
 		}
-	case ViewExport:
-		hints = "↑/↓ select · enter export"
-	case ViewWrapped:
-		hints = "w week · m month · y year"
 	}
 	base := ui.FootStyle.Render(hints)
-	right := ui.Dim.Render("q quit")
+	right := ui.Dim.Render("q quit  ·  ? help")
 	status := ""
 	if m.status != "" {
-		status = "  " + ui.Dim.Render("· "+m.status)
+		status = "  " + ui.Acc.Render("· "+m.status)
 	}
 	return ui.FooterBar(m.width, base+status, right)
 }
 
-// Small helpers
+// ---- small helpers ----
+
 func (m *Model) syncMetaFromEntry() {
 	m.meta = todayMeta{
 		Mood:        itoa(m.today.Mood),
@@ -599,3 +683,16 @@ func max(a, b int) int {
 	return b
 }
 
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
