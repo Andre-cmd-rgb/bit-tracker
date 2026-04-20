@@ -24,6 +24,9 @@ func (m *Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.generating = true
 		target := m.today
 		target.RawText = m.editor.Value()
+		if strings.TrimSpace(target.RawText) == "" {
+			target.RawText = m.today.RawText
+		}
 		return m, m.aiRun("rewrite", m.recentEntries(7), target)
 	case "f":
 		m.chatMode = "reflect"
@@ -42,51 +45,80 @@ func (m *Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) viewChat() string {
 	tone := diary.CurrentTone(m.history)
-	status := ui.Dim.Render("mode: " + modeLabel(m.chatMode) + " · tone: " + tone.String())
-	if !m.engine.Available() {
-		status += "  " + ui.Muted.Render("(no local model — grounded fallback)")
+	toneBadge := ui.Dim.Render("tone: " + tone.String())
+	switch tone {
+	case diary.ToneHarsh, diary.ToneIntervention:
+		toneBadge = ui.Warn.Render("tone: " + tone.String())
+	case diary.ToneReflective:
+		toneBadge = ui.Acc.Render("tone: " + tone.String())
 	}
-	if m.generating {
-		status += "  " + ui.Acc.Render("· thinking…")
+	modelBadge := ui.Muted.Render("no model — grounded fallback")
+	if m.engine != nil && m.engine.Available() {
+		modelBadge = ui.Good.Render("model on")
+	}
+	modes := []string{"rewrite", "reflect", "wake_up", "chat"}
+	modeLine := []string{}
+	for _, mode := range modes {
+		style := ui.Nav
+		if mode == m.chatMode {
+			style = ui.NavActive
+		}
+		modeLine = append(modeLine, style.Render(mode))
 	}
 
-	var b strings.Builder
-	if len(m.chat) == 0 {
-		b.WriteString(ui.Muted.Render("no messages yet."))
-		b.WriteString("\n")
-		b.WriteString(ui.Muted.Render("r rewrite today · f reflect last 14 · u wake up · i type a prompt"))
+	header := lipgloss.JoinVertical(lipgloss.Left,
+		ui.Title.Render("chat")+"   "+toneBadge+"   "+modelBadge,
+		strings.Join(modeLine, " "),
+	)
+
+	// Messages — show last N that fit.
+	maxMessages := 6
+	start := 0
+	if len(m.chat) > maxMessages {
+		start = len(m.chat) - maxMessages
 	}
-	for _, msg := range m.chat {
+	var body strings.Builder
+	if len(m.chat) == 0 {
+		body.WriteString(ui.Muted.Render("no messages yet.\n"))
+		body.WriteString(ui.Muted.Render("r rewrite today · f reflect last 14 days · u wake up · i type a prompt"))
+	}
+	for _, msg := range m.chat[start:] {
 		var role string
 		switch msg.role {
 		case "user":
 			role = ui.Acc.Render("you")
 		case "ai":
-			role = ui.Good.Render("bit-tracker [" + modeLabel(msg.mode) + "]")
+			role = ui.Good.Render("bit-tracker [" + msg.mode + "]")
 		default:
 			role = ui.Warn.Render("system")
 		}
-		b.WriteString(role + "\n")
-		b.WriteString(msg.text + "\n\n")
+		body.WriteString(role + "\n")
+		body.WriteString(indent(msg.text, "  ") + "\n\n")
+	}
+	if m.generating {
+		body.WriteString(ui.Acc.Render("thinking…"))
 	}
 
-	input := ""
+	var input string
 	if m.chatInput.Focused() {
-		input = m.chatInput.View()
+		input = ui.Acc.Render("❯ ") + m.chatInput.View()
 	} else {
 		input = ui.Muted.Render("press i to type a prompt")
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left,
-		ui.Title.Render("chat"), status, "",
-		b.String(),
+		header,
+		"",
+		body.String(),
+		"",
 		input,
 	)
 }
 
-func modeLabel(m string) string {
-	if m == "" {
-		return "chat"
+func indent(s, prefix string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = prefix + l
 	}
-	return m
+	return strings.Join(lines, "\n")
 }

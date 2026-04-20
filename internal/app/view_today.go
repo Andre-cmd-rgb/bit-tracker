@@ -20,15 +20,15 @@ func (m *Model) handleTodayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+s":
 		return m, m.saveToday()
 	case "r":
+		m.applyMetaToEntry(&m.today)
+		m.today.RawText = m.editor.Value()
 		m.view = ViewChat
 		m.chatMode = "rewrite"
 		m.generating = true
 		target := m.today
-		target.RawText = m.editor.Value()
-		return m, m.aiRun("rewrite", m.recentEntries(7), target)
+		return m, tea.Batch(m.saveToday(), m.aiRun("rewrite", m.recentEntries(7), target))
 	case "+":
-		// nudge mood
-		if m.today.Mood < 10 {
+		if parseInt(m.meta.Mood) < 10 {
 			m.meta.Mood = itoa(parseInt(m.meta.Mood) + 1)
 		}
 		return m, nil
@@ -43,11 +43,20 @@ func (m *Model) handleTodayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "s":
 		m.meta.Study = addMinutes(m.meta.Study, 15)
 		return m, nil
+	case "S":
+		m.meta.Study = addMinutes(m.meta.Study, -15)
+		return m, nil
 	case "p":
 		m.meta.Project = addMinutes(m.meta.Project, 15)
 		return m, nil
+	case "P":
+		m.meta.Project = addMinutes(m.meta.Project, -15)
+		return m, nil
 	case "o":
 		m.meta.Scroll = addMinutes(m.meta.Scroll, 15)
+		return m, nil
+	case "O":
+		m.meta.Scroll = addMinutes(m.meta.Scroll, -15)
 		return m, nil
 	case "x":
 		m.meta.Completed = !m.meta.Completed
@@ -76,27 +85,22 @@ func addMinutes(cur string, step int) string {
 }
 
 func (m *Model) viewToday() string {
-	date := m.today.Date.Format("Monday, 2 January 2006")
+	date := strings.ToLower(m.today.Date.Format("Monday, 2 January 2006"))
 	started := m.today.StartedAt.Format("15:04")
-	header := ui.Title.Render(strings.ToLower(date)) + "  " +
-		ui.Dim.Render("started at "+started)
 
-	// Editor pane
-	editorBox := m.editor.View()
-	label := ui.Muted.Render("editor (enter to focus, esc to save & leave)")
-	if m.editing {
-		label = ui.Acc.Render("editing — esc to save & leave")
-	}
+	mood := parseInt(m.meta.Mood)
+	study := parseInt(m.meta.Study)
+	scroll := parseInt(m.meta.Scroll)
+	project := parseInt(m.meta.Project)
 
-	// Metadata pane
-	dayLabel := ui.Muted.Render("neutral")
 	isBad, isGood := diary.Score(diary.Entry{
-		Mood:           parseInt(m.meta.Mood),
-		StudyMinutes:   parseInt(m.meta.Study),
-		ScrollMinutes:  parseInt(m.meta.Scroll),
-		ProjectMinutes: parseInt(m.meta.Project),
+		Mood:           mood,
+		StudyMinutes:   study,
+		ScrollMinutes:  scroll,
+		ProjectMinutes: project,
 		RawText:        m.editor.Value(),
 	})
+	dayLabel := ui.Muted.Render("neutral")
 	switch {
 	case isGood:
 		dayLabel = ui.Good.Render("good day")
@@ -104,26 +108,71 @@ func (m *Model) viewToday() string {
 		dayLabel = ui.Bad.Render("bad day")
 	}
 
-	mood := parseInt(m.meta.Mood)
-	metaLines := []string{
-		ui.StatLabel.Render("mood      ") + ui.StatValue.Render(fmt.Sprintf("%d/10", mood)) + "  " + ui.Bar(mood, 10, 12),
-		ui.StatLabel.Render("study     ") + ui.StatValue.Render(m.meta.Study+"m") + "  " + ui.Bar(parseInt(m.meta.Study), 180, 12),
-		ui.StatLabel.Render("project   ") + ui.StatValue.Render(m.meta.Project+"m") + "  " + ui.Bar(parseInt(m.meta.Project), 180, 12),
-		ui.StatLabel.Render("scroll    ") + ui.StatValue.Render(m.meta.Scroll+"m") + "  " + ui.Bar(parseInt(m.meta.Scroll), 180, 12),
-		ui.StatLabel.Render("tags      ") + ui.StatValue.Render(orDash(m.meta.Tags)),
-		ui.StatLabel.Render("project   ") + ui.StatValue.Render(orDash(m.meta.ProjectName)) + completedLabel(m.meta.Completed),
-		ui.StatLabel.Render("note      ") + ui.Dim.Render(truncate(m.meta.ProjectNote, 40)),
-		ui.StatLabel.Render("label     ") + dayLabel,
+	editorState := ui.Muted.Render("press enter to edit")
+	if m.editing {
+		editorState = ui.Acc.Render("editing — esc to save & leave")
 	}
 
-	meta := lipgloss.JoinVertical(lipgloss.Left, metaLines...)
-	rightPanel := ui.Panel.BorderForeground(ui.Colors.Border).Width(40).Render(
-		ui.Title.Render("today") + "\n" + meta + "\n\n" +
-			ui.Muted.Render("adjust: m mood+  s +15 study  p +15 project  o +15 scroll  x toggle done  + / - mood"))
+	header := ui.Title.Render(date) + "  " + ui.Dim.Render("started at "+started) + "  " + dayLabel
 
-	leftPanel := lipgloss.JoinVertical(lipgloss.Left, label, editorBox)
-	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, "  ", rightPanel)
+	// Responsive: wide → side-by-side; narrow → stacked.
+	wide := m.width >= 110
+
+	editorBox := m.editor.View()
+	editorPane := lipgloss.JoinVertical(lipgloss.Left,
+		ui.SectionTitle.Render("entry"),
+		editorState,
+		editorBox,
+	)
+
+	metaPane := m.renderTodayMetrics(mood, study, scroll, project)
+
+	var body string
+	if wide {
+		left := lipgloss.NewStyle().MarginRight(2).Render(editorPane)
+		body = lipgloss.JoinHorizontal(lipgloss.Top, left, metaPane)
+	} else {
+		body = lipgloss.JoinVertical(lipgloss.Left, editorPane, "", metaPane)
+	}
+
 	return lipgloss.JoinVertical(lipgloss.Left, header, "", body)
+}
+
+func (m *Model) renderTodayMetrics(mood, study, scroll, project int) string {
+	line := func(label, value, bar string) string {
+		return ui.StatLabel.Render(fmt.Sprintf("%-9s", label)) +
+			ui.StatValue.Render(fmt.Sprintf("%-7s", value)) +
+			bar
+	}
+	stats := []string{
+		line("mood", fmt.Sprintf("%d/10", mood), ui.Bar(mood, 10, 14)),
+		line("study", fmt.Sprintf("%dm", study), ui.Bar(study, 180, 14)),
+		line("project", fmt.Sprintf("%dm", project), ui.Bar(project, 180, 14)),
+		line("scroll", fmt.Sprintf("%dm", scroll), ui.Bar(scroll, 180, 14)),
+	}
+
+	meta := []string{
+		ui.StatLabel.Render("tags      ") + ui.StatValue.Render(orDash(m.meta.Tags)),
+		ui.StatLabel.Render("project   ") + ui.StatValue.Render(orDash(m.meta.ProjectName)) + completedLabel(m.meta.Completed),
+	}
+	if strings.TrimSpace(m.meta.ProjectNote) != "" {
+		meta = append(meta, ui.StatLabel.Render("note      ")+ui.Dim.Render(truncate(m.meta.ProjectNote, 40)))
+	}
+
+	hints := ui.Muted.Render(
+		"+/- mood  ·  s +15 study  ·  p +15 project  ·  o +15 scroll\n" +
+			"x toggle project done  ·  r rewrite via AI",
+	)
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		ui.SectionTitle.Render("today"),
+		strings.Join(stats, "\n"),
+		"",
+		strings.Join(meta, "\n"),
+		"",
+		hints,
+	)
+	return ui.Card.Width(44).Render(content)
 }
 
 func orDash(s string) string {

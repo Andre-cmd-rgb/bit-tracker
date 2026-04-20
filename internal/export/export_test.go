@@ -81,3 +81,36 @@ func TestMarkdownEmptyRange(t *testing.T) {
 		t.Errorf("empty range: %q", got)
 	}
 }
+
+func TestStripIntroPreservesUserContent(t *testing.T) {
+	// A user-written "started at the gym" line must not be confused with the
+	// auto intro's "started at 07:14" line.
+	e := sampleEntry()
+	e.RawText = "monday, 20 april 2026\nstarted at 07:14\n\ntoday:\nstarted at the gym, felt good.\nshipped the thing."
+	got := Markdown(e, Options{})
+	if !strings.Contains(got, "started at the gym") {
+		t.Errorf("stripIntro ate user content:\n%s", got)
+	}
+	if !strings.Contains(got, "shipped the thing") {
+		t.Errorf("stripIntro ate body:\n%s", got)
+	}
+	// The auto date header line must not show up as body content.
+	if strings.Contains(got, "monday, 20 april 2026") {
+		t.Errorf("auto date header still present:\n%s", got)
+	}
+}
+
+func TestExportOptionsWithCleanedBody(t *testing.T) {
+	e := sampleEntry()
+	e.CleanedText = "cleaned prose."
+	got := Markdown(e, Options{UseCleaned: true, AIText: "reflection text", AITitle: "reflection"})
+	if !strings.Contains(got, "cleaned prose.") {
+		t.Errorf("cleaned body missing")
+	}
+	if !strings.Contains(got, "reflection text") {
+		t.Errorf("ai text missing")
+	}
+	if !strings.Contains(got, "## reflection") {
+		t.Errorf("ai title missing")
+	}
+}

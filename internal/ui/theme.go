@@ -28,6 +28,7 @@ var Colors = Palette{
 
 var (
 	Title = lipgloss.NewStyle().Foreground(Colors.Fg).Bold(true)
+	Sub   = lipgloss.NewStyle().Foreground(Colors.Dim).Italic(true)
 	Dim   = lipgloss.NewStyle().Foreground(Colors.Dim)
 	Muted = lipgloss.NewStyle().Foreground(Colors.Muted)
 	Good  = lipgloss.NewStyle().Foreground(Colors.Good).Bold(true)
@@ -45,18 +46,68 @@ var (
 			Bold(true).
 			Padding(0, 1)
 
-	Panel = lipgloss.NewStyle().
+	Card = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(Colors.Border).
-		Padding(1, 2)
-
-	Footer = lipgloss.NewStyle().
-		Foreground(Colors.Muted).
 		Padding(0, 1)
+
+	FootStyle = lipgloss.NewStyle().Foreground(Colors.Muted)
 
 	StatLabel = lipgloss.NewStyle().Foreground(Colors.Dim)
 	StatValue = lipgloss.NewStyle().Foreground(Colors.Fg).Bold(true)
+
+	SectionTitle = lipgloss.NewStyle().
+			Foreground(Colors.Accent).
+			Bold(true).
+			MarginBottom(0)
 )
+
+// HRule returns a horizontal separator of the given width.
+func HRule(w int) string {
+	if w <= 0 {
+		return ""
+	}
+	return lipgloss.NewStyle().Foreground(Colors.Border).Render(repeat("─", w))
+}
+
+// Frame composes header, body, and footer into a full-screen layout.
+// The body is clamped to the middle region between header and footer.
+func Frame(w, h int, header, body, footer string) string {
+	if w < 30 || h < 10 {
+		return body
+	}
+	headerH := lipgloss.Height(header)
+	footerH := lipgloss.Height(footer)
+	// header + body + hrule(1) + footer = h  →  body = h - header - footer - 1
+	bodyH := h - headerH - footerH - 1
+	if bodyH < 3 {
+		bodyH = 3
+	}
+	bodyBlock := lipgloss.NewStyle().
+		Padding(1, 2).
+		Width(w).
+		Height(bodyH).
+		MaxHeight(bodyH).
+		Render(body)
+	return lipgloss.JoinVertical(lipgloss.Left,
+		header,
+		bodyBlock,
+		HRule(w),
+		footer,
+	)
+}
+
+// FooterBar renders a left/right-aligned footer line of the given width.
+func FooterBar(w int, left, right string) string {
+	if w <= 0 {
+		return left
+	}
+	gap := w - lipgloss.Width(left) - lipgloss.Width(right) - 2
+	if gap < 1 {
+		gap = 1
+	}
+	return " " + left + repeat(" ", gap) + right + " "
+}
 
 // Bar renders a compact ASCII progress bar.
 func Bar(value, max, width int) string {

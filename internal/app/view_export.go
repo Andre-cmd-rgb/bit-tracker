@@ -82,12 +82,15 @@ func (m *Model) viewExport() string {
 	b.WriteString(ui.Title.Render("export") + "\n\n")
 	for i, opt := range exportOptions {
 		cursor := "  "
+		label := opt.Label
 		if i == m.exportIdx {
 			cursor = ui.Acc.Render("▸ ")
+			label = ui.StatValue.Render(opt.Label)
 		}
-		b.WriteString(cursor + opt.Label + "\n")
+		b.WriteString(cursor + label + "\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(ui.Muted.Render("output directory: " + m.cfg.ExportDir))
+	b.WriteString(ui.Muted.Render("output directory:") + " " + ui.Dim.Render(m.cfg.ExportDir) + "\n")
+	b.WriteString(ui.Muted.Render("exports preserve metrics, tags, project info, and the body."))
 	return lipgloss.NewStyle().Render(b.String())
 }

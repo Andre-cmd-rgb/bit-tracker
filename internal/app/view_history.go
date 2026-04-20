@@ -90,16 +90,40 @@ func (m *Model) renderHistoryList() string {
 		if m.filterIsTag {
 			tag = "tag"
 		}
-		header += "  " + ui.Dim.Render(fmt.Sprintf("%s: %s", tag, m.activeFilter))
+		header += "  " + ui.Dim.Render(fmt.Sprintf("· %s: %s", tag, m.activeFilter))
 	}
+	header += "  " + ui.Muted.Render(fmt.Sprintf("(%d)", len(m.history)))
 	b.WriteString(header + "\n\n")
 
 	if len(m.history) == 0 {
-		b.WriteString(ui.Muted.Render("no entries yet."))
+		b.WriteString(ui.Muted.Render("no entries yet. press t to open today."))
 		return b.String()
 	}
 
-	for i := len(m.history) - 1; i >= 0; i-- {
+	// Virtualise the list to the available height.
+	maxRows := m.height - 8
+	if maxRows < 5 {
+		maxRows = 5
+	}
+	total := len(m.history)
+	// historyIdx is the display-slot (newest-first). Convert to natural idx.
+	displayIdx := total - 1 - m.historyIdx
+	if displayIdx < 0 {
+		displayIdx = 0
+	}
+	start := m.historyIdx - maxRows/2
+	if start < 0 {
+		start = 0
+	}
+	end := start + maxRows
+	if end > total {
+		end = total
+	}
+	for i := total - 1; i >= 0; i-- {
+		slot := total - 1 - i
+		if slot < start || slot >= end {
+			continue
+		}
 		e := m.history[i]
 		cursor := "  "
 		if i == m.historyIdx {
@@ -112,15 +136,18 @@ func (m *Model) renderHistoryList() string {
 		case e.IsBadDay:
 			label = ui.Bad.Render("●")
 		}
-		date := e.Date.Format("Mon 02 Jan 2006")
+		date := strings.ToLower(e.Date.Format("Mon 02 Jan 2006"))
 		meta := fmt.Sprintf("mood %d · study %dm · scroll %dm · project %dm",
 			e.Mood, e.StudyMinutes, e.ScrollMinutes, e.ProjectMinutes)
 		tags := ""
 		if len(e.Tags) > 0 {
 			tags = "  " + ui.Dim.Render("#"+strings.Join(e.Tags, " #"))
 		}
-		line := cursor + label + " " + ui.StatValue.Render(date) + "  " + ui.Dim.Render(meta) + tags
-		b.WriteString(line + "\n")
+		row := cursor + label + " " + ui.StatValue.Render(date) + "   " + ui.Dim.Render(meta) + tags
+		b.WriteString(row + "\n")
+	}
+	if total > maxRows {
+		b.WriteString("\n" + ui.Muted.Render(fmt.Sprintf("showing %d of %d", end-start, total)))
 	}
 	return b.String()
 }
@@ -137,22 +164,35 @@ func (m *Model) renderEntryDetail(e diary.Entry) string {
 		label = ui.Bad.Render("bad day")
 	}
 
-	meta := lipgloss.JoinVertical(lipgloss.Left,
-		ui.StatLabel.Render("mood    ")+ui.StatValue.Render(fmt.Sprintf("%d/10", e.Mood)),
-		ui.StatLabel.Render("study   ")+ui.StatValue.Render(fmt.Sprintf("%dm", e.StudyMinutes)),
-		ui.StatLabel.Render("project ")+ui.StatValue.Render(fmt.Sprintf("%dm", e.ProjectMinutes)),
-		ui.StatLabel.Render("scroll  ")+ui.StatValue.Render(fmt.Sprintf("%dm", e.ScrollMinutes)),
-		ui.StatLabel.Render("tags    ")+ui.StatValue.Render(orDash(strings.Join(e.Tags, ", "))),
-		ui.StatLabel.Render("project ")+ui.StatValue.Render(orDash(e.ProjectName))+completedLabel(e.ProjectCompleted),
-		ui.StatLabel.Render("label   ")+label,
-	)
+	metaCard := ui.Card.Width(38).Render(lipgloss.JoinVertical(lipgloss.Left,
+		ui.SectionTitle.Render("metrics"),
+		ui.StatLabel.Render("mood     ")+ui.StatValue.Render(fmt.Sprintf("%d/10", e.Mood))+"  "+ui.Bar(e.Mood, 10, 12),
+		ui.StatLabel.Render("study    ")+ui.StatValue.Render(fmt.Sprintf("%dm", e.StudyMinutes))+"  "+ui.Bar(e.StudyMinutes, 180, 12),
+		ui.StatLabel.Render("project  ")+ui.StatValue.Render(fmt.Sprintf("%dm", e.ProjectMinutes))+"  "+ui.Bar(e.ProjectMinutes, 180, 12),
+		ui.StatLabel.Render("scroll   ")+ui.StatValue.Render(fmt.Sprintf("%dm", e.ScrollMinutes))+"  "+ui.Bar(e.ScrollMinutes, 180, 12),
+		"",
+		ui.StatLabel.Render("tags     ")+ui.StatValue.Render(orDash(strings.Join(e.Tags, ", "))),
+		ui.StatLabel.Render("project  ")+ui.StatValue.Render(orDash(e.ProjectName))+completedLabel(e.ProjectCompleted),
+		ui.StatLabel.Render("label    ")+label,
+	))
 
 	body := strings.TrimSpace(e.RawText)
 
+	entryPane := lipgloss.JoinVertical(lipgloss.Left,
+		ui.SectionTitle.Render("entry"),
+		body,
+	)
+
+	var layout string
+	if m.width >= 100 {
+		left := lipgloss.NewStyle().MarginRight(2).Render(entryPane)
+		layout = lipgloss.JoinHorizontal(lipgloss.Top, left, metaCard)
+	} else {
+		layout = lipgloss.JoinVertical(lipgloss.Left, metaCard, "", entryPane)
+	}
+
 	return lipgloss.JoinVertical(lipgloss.Left,
 		title, sub, "",
-		meta, "",
-		ui.Title.Render("entry"),
-		body,
+		layout,
 	)
 }

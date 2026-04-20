@@ -86,12 +86,15 @@ func MarkdownRange(entries []diary.Entry, opts Options) string {
 	return b.String()
 }
 
+// stripIntro removes only the auto-generated preamble emitted by diary.Intro.
+// It is conservative — anything that doesn't look exactly like an intro line
+// is left in the body.
 func stripIntro(s string) string {
 	lines := strings.Split(s, "\n")
 	i := 0
 	for i < len(lines) {
 		t := strings.TrimSpace(lines[i])
-		if t == "" || strings.HasPrefix(t, "started at") || strings.HasPrefix(t, "today:") || isDateHeader(t) {
+		if t == "" || t == "today:" || isIntroStartedAt(t) || isDateHeader(t) {
 			i++
 			continue
 		}
@@ -100,9 +103,30 @@ func stripIntro(s string) string {
 	return strings.Join(lines[i:], "\n")
 }
 
+// isIntroStartedAt matches exactly "started at HH:MM" with nothing after.
+func isIntroStartedAt(line string) bool {
+	if !strings.HasPrefix(line, "started at ") {
+		return false
+	}
+	rest := strings.TrimPrefix(line, "started at ")
+	if len(rest) != 5 || rest[2] != ':' {
+		return false
+	}
+	for i, r := range rest {
+		if i == 2 {
+			continue
+		}
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// isDateHeader matches the auto-generated `weekday, D month YYYY` line.
 func isDateHeader(line string) bool {
 	for _, w := range []string{"monday,", "tuesday,", "wednesday,", "thursday,", "friday,", "saturday,", "sunday,"} {
-		if strings.HasPrefix(line, w) {
+		if strings.HasPrefix(line, w+" ") {
 			return true
 		}
 	}

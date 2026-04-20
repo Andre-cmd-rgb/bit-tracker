@@ -13,7 +13,7 @@ import (
 
 func (m *Model) handleWrappedKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "1":
+	case "1", "w":
 		m.wrappedPeriod = recap.PeriodWeek
 		return m, m.computeSummary(m.wrappedPeriod)
 	case "2":
@@ -22,10 +22,7 @@ func (m *Model) handleWrappedKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "3", "y":
 		m.wrappedPeriod = recap.PeriodYear
 		return m, m.computeSummary(m.wrappedPeriod)
-	case "w":
-		m.wrappedPeriod = recap.PeriodWeek
-		return m, m.computeSummary(m.wrappedPeriod)
-	case "m":
+	case "M":
 		m.wrappedPeriod = recap.PeriodMonth
 		return m, m.computeSummary(m.wrappedPeriod)
 	}
@@ -45,20 +42,33 @@ func (m *Model) viewWrapped() string {
 			ui.Muted.Render("no entries in this period yet."))
 	}
 
-	// Stat cards
-	totalTime := s.TotalStudy + s.TotalProject + s.TotalScroll
-	cards := []string{
-		statCard("days journaled", fmt.Sprintf("%d", s.DaysJournaled), ""),
-		statCard("avg mood", fmt.Sprintf("%.1f/10", s.AvgMood), ui.Bar(int(s.AvgMood*10), 100, 16)),
-		statCard("good days", fmt.Sprintf("%d", s.GoodDays), ui.Bar(s.GoodDays, s.DaysJournaled, 16)),
-		statCard("bad days", fmt.Sprintf("%d", s.BadDays), ui.Bar(s.BadDays, s.DaysJournaled, 16)),
+	// Stat cards — responsive wrap.
+	cardW := 18
+	perRow := m.width / (cardW + 2)
+	if perRow < 2 {
+		perRow = 2
 	}
-	row1 := lipgloss.JoinHorizontal(lipgloss.Top, cards[0], " ", cards[1], " ", cards[2], " ", cards[3])
+	if perRow > 4 {
+		perRow = 4
+	}
 
+	cards := []string{
+		statCard(cardW, "days journaled", fmt.Sprintf("%d", s.DaysJournaled), ""),
+		statCard(cardW, "avg mood", fmt.Sprintf("%.1f/10", s.AvgMood), ui.Bar(int(s.AvgMood*10), 100, cardW-4)),
+		statCard(cardW, "good days", fmt.Sprintf("%d", s.GoodDays), ui.Bar(s.GoodDays, maxInt(s.DaysJournaled, 1), cardW-4)),
+		statCard(cardW, "bad days", fmt.Sprintf("%d", s.BadDays), ui.Bar(s.BadDays, maxInt(s.DaysJournaled, 1), cardW-4)),
+	}
+	row := wrapRow(cards, perRow)
+
+	totalTime := maxInt(s.TotalStudy+s.TotalProject+s.TotalScroll, 1)
+	barW := minInt(m.width-30, 36)
+	if barW < 14 {
+		barW = 14
+	}
 	timeLines := []string{
-		fmt.Sprintf("study    %4dm  %s", s.TotalStudy, ui.Bar(s.TotalStudy, max(totalTime, 1), 30)),
-		fmt.Sprintf("project  %4dm  %s", s.TotalProject, ui.Bar(s.TotalProject, max(totalTime, 1), 30)),
-		fmt.Sprintf("scroll   %4dm  %s", s.TotalScroll, ui.Bar(s.TotalScroll, max(totalTime, 1), 30)),
+		fmt.Sprintf("study    %4dm  %s", s.TotalStudy, ui.Bar(s.TotalStudy, totalTime, barW)),
+		fmt.Sprintf("project  %4dm  %s", s.TotalProject, ui.Bar(s.TotalProject, totalTime, barW)),
+		fmt.Sprintf("scroll   %4dm  %s", s.TotalScroll, ui.Bar(s.TotalScroll, totalTime, barW)),
 	}
 
 	streakLines := []string{
@@ -70,11 +80,11 @@ func (m *Model) viewWrapped() string {
 
 	tags := "—"
 	if len(s.TopTags) > 0 {
-		tagParts := []string{}
+		parts := []string{}
 		for _, t := range s.TopTags {
-			tagParts = append(tagParts, fmt.Sprintf("#%s(%d)", t.Tag, t.Count))
+			parts = append(parts, fmt.Sprintf("%s(%d)", ui.Acc.Render("#"+t.Tag), t.Count))
 		}
-		tags = strings.Join(tagParts, "  ")
+		tags = strings.Join(parts, "  ")
 	}
 	themes := "—"
 	if len(s.TopThemes) > 0 {
@@ -84,7 +94,6 @@ func (m *Model) viewWrapped() string {
 		}
 		themes = strings.Join(parts, "  ")
 	}
-
 	projects := "—"
 	if len(s.ProjectsTouched) > 0 {
 		projects = strings.Join(s.ProjectsTouched, ", ")
@@ -96,29 +105,28 @@ func (m *Model) viewWrapped() string {
 
 	body := lipgloss.JoinVertical(lipgloss.Left,
 		header, tabs, "",
-		row1, "",
-		ui.Title.Render("time breakdown"),
+		row, "",
+		ui.SectionTitle.Render("time breakdown"),
 		strings.Join(timeLines, "\n"), "",
-		ui.Title.Render("streaks"),
+		ui.SectionTitle.Render("streaks"),
 		strings.Join(streakLines, "\n"), "",
-		ui.Title.Render("top tags"), tags, "",
-		ui.Title.Render("top themes"), themes, "",
-		ui.Title.Render("projects"),
-		"touched: "+projects,
+		ui.SectionTitle.Render("top tags"), tags, "",
+		ui.SectionTitle.Render("top themes"), themes, "",
+		ui.SectionTitle.Render("projects"),
+		"touched:   "+projects,
 		"completed: "+done, "",
-		ui.Title.Render("takeaway"),
+		ui.SectionTitle.Render("takeaway"),
 		ui.Acc.Render(s.Takeaway),
 	)
 	return body
 }
 
-func statCard(label, value, extra string) string {
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ui.Colors.Border).
-		Padding(0, 1).
-		Width(22).
-		Render(ui.StatLabel.Render(label) + "\n" + ui.StatValue.Render(value) + "\n" + extra)
+func statCard(w int, label, value, extra string) string {
+	inner := ui.StatLabel.Render(label) + "\n" + ui.StatValue.Render(value)
+	if extra != "" {
+		inner += "\n" + extra
+	}
+	return ui.Card.Width(w).Render(inner)
 }
 
 func renderPeriodTabs(cur recap.Period) string {
@@ -128,7 +136,7 @@ func renderPeriodTabs(cur recap.Period) string {
 		name string
 	}{
 		{"w", recap.PeriodWeek, "week"},
-		{"m", recap.PeriodMonth, "month"},
+		{"M", recap.PeriodMonth, "month"},
 		{"y", recap.PeriodYear, "year"},
 	}
 	var out []string
@@ -140,4 +148,33 @@ func renderPeriodTabs(cur recap.Period) string {
 		out = append(out, style.Render("["+n.key+"] "+n.name))
 	}
 	return strings.Join(out, " ")
+}
+
+func wrapRow(items []string, perRow int) string {
+	if perRow <= 0 {
+		perRow = 1
+	}
+	var rows []string
+	for i := 0; i < len(items); i += perRow {
+		end := i + perRow
+		if end > len(items) {
+			end = len(items)
+		}
+		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, items[i:end]...))
+	}
+	return strings.Join(rows, "\n")
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

@@ -44,15 +44,15 @@ func (s *stub) Generate(prompt string, _ GenOptions) (string, error) {
 }
 
 func (s *stub) RewriteEntry(e diary.Entry) (string, error) {
-	// Deterministic "cleanup": strip intro header and collapse blank lines.
+	// Deterministic "cleanup": strip the auto-generated intro, trim trailing
+	// whitespace per line, collapse repeated blank lines.
 	lines := strings.Split(e.RawText, "\n")
 	out := make([]string, 0, len(lines))
 	skipIntro := true
 	for _, l := range lines {
 		if skipIntro {
 			t := strings.TrimSpace(l)
-			if t == "" || strings.HasPrefix(t, "today:") || strings.HasPrefix(t, "started at") ||
-				isDateHeader(t) {
+			if t == "" || t == "today:" || isIntroStartedAt(t) || isDateHeader(t) {
 				continue
 			}
 			skipIntro = false
@@ -131,13 +131,31 @@ func (s *stub) WakeUp(entries []diary.Entry) (string, error) {
 }
 
 func isDateHeader(line string) bool {
-	// crude check: lowercase weekday prefix
-	for _, w := range []string{"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"} {
-		if strings.HasPrefix(line, w+",") {
+	for _, w := range []string{"monday,", "tuesday,", "wednesday,", "thursday,", "friday,", "saturday,", "sunday,"} {
+		if strings.HasPrefix(line, w+" ") {
 			return true
 		}
 	}
 	return false
+}
+
+func isIntroStartedAt(line string) bool {
+	if !strings.HasPrefix(line, "started at ") {
+		return false
+	}
+	rest := strings.TrimPrefix(line, "started at ")
+	if len(rest) != 5 || rest[2] != ':' {
+		return false
+	}
+	for i, r := range rest {
+		if i == 2 {
+			continue
+		}
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func collapseBlankLines(s string) string {

@@ -3,7 +3,6 @@ package app
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,7 +13,6 @@ import (
 
 	"github.com/andre-cmd-rgb/bit-tracker/internal/ai"
 	"github.com/andre-cmd-rgb/bit-tracker/internal/diary"
-	"github.com/andre-cmd-rgb/bit-tracker/internal/export"
 	"github.com/andre-cmd-rgb/bit-tracker/internal/recap"
 	"github.com/andre-cmd-rgb/bit-tracker/internal/ui"
 )
@@ -123,6 +121,7 @@ func NewModel(cfg Config, repo *diary.Repo, engine ai.Engine) *Model {
 		editor:        ta,
 		searchInput:   si,
 		chatInput:     ci,
+		chatMode:      "chat",
 		wrappedPeriod: recap.PeriodWeek,
 	}
 	return m
@@ -243,8 +242,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.editor.SetWidth(max(40, msg.Width-10))
-		m.editor.SetHeight(max(10, msg.Height-14))
+		editorW := max(40, msg.Width-60) // leave room for the metrics card
+		if msg.Width < 110 {
+			editorW = max(40, msg.Width-8)
+		}
+		m.editor.SetWidth(editorW)
+		m.editor.SetHeight(max(10, msg.Height-16))
+		m.searchInput.Width = max(20, msg.Width-20)
+		m.chatInput.Width = max(20, msg.Width-12)
 		return m, nil
 
 	case todayLoadedMsg:
@@ -302,6 +307,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Ctrl+C always exits, even when inputs are focused.
+	if msg.Type == tea.KeyCtrlC {
+		return m, tea.Quit
+	}
+
 	// Text-input focus paths first.
 	if m.view == ViewToday && m.editing {
 		switch msg.String() {
@@ -456,8 +466,7 @@ func (m *Model) View() string {
 	case ViewWrapped:
 		body = m.viewWrapped()
 	}
-	panel := ui.Panel.Width(m.width - 2).Render(body)
-	return lipgloss.JoinVertical(lipgloss.Left, header, panel, footer)
+	return ui.Frame(m.width, m.height, header, body, footer)
 }
 
 func (m *Model) header() string {
@@ -473,14 +482,26 @@ func (m *Model) header() string {
 	toneLabel := ""
 	switch tone {
 	case diary.ToneReflective:
-		toneLabel = ui.Dim.Render(" · reflective")
+		toneLabel = "  " + ui.Dim.Render("· reflective tone")
 	case diary.ToneHarsh:
-		toneLabel = ui.Warn.Render(" · harsh mode")
+		toneLabel = "  " + ui.Warn.Render("· harsh mode")
 	case diary.ToneIntervention:
-		toneLabel = ui.Warn.Render(" · intervention")
+		toneLabel = "  " + ui.Warn.Render("· intervention")
 	}
-	title := ui.Title.Render("bit-tracker") + ui.Dim.Render("  "+time.Now().Format("Mon 02 Jan 2006")) + toneLabel
-	return lipgloss.JoinVertical(lipgloss.Left, title, strings.Join(tabs, " "))
+	model := ""
+	if m.engine != nil && m.engine.Available() {
+		model = "  " + ui.Good.Render("· model on")
+	} else {
+		model = "  " + ui.Dim.Render("· no model")
+	}
+	left := ui.Title.Render("bit-tracker") +
+		"  " + ui.Dim.Render(strings.ToLower(time.Now().Format("Mon 02 Jan 2006"))) +
+		toneLabel + model
+	return lipgloss.JoinVertical(lipgloss.Left,
+		left,
+		strings.Join(tabs, " "),
+		ui.HRule(m.width),
+	)
 }
 
 func (m *Model) footer() string {
@@ -488,34 +509,37 @@ func (m *Model) footer() string {
 	switch m.view {
 	case ViewToday:
 		if m.editing {
-			hints = "esc save & exit · ctrl+s save"
+			hints = "esc save & leave · ctrl+s save"
 		} else {
-			hints = "enter edit · r rewrite · tab views · q quit · 1-4 focus field · m/s/p adjust"
+			hints = "enter edit · r rewrite · m mood · s +15 study · p +15 project · o +15 scroll · x project done"
 		}
 	case ViewHistory:
-		if m.historyMode == historySearch {
-			hints = "enter search · esc cancel · prefix # for tag"
-		} else if m.historyMode == historyView {
-			hints = "esc back · e export · m markdown · H html"
-		} else {
-			hints = "↑/↓ move · enter open · / search · q quit"
+		switch m.historyMode {
+		case historySearch:
+			hints = "enter search · esc cancel · # prefix = tag"
+		case historyView:
+			hints = "esc back · m markdown · H html"
+		default:
+			hints = "↑/↓ move · enter open · / search"
 		}
 	case ViewChat:
 		if m.chatInput.Focused() {
 			hints = "enter send · esc unfocus"
 		} else {
-			hints = "i focus · r rewrite · f reflect · u wake up · q quit"
+			hints = "i type · r rewrite · f reflect · u wake up · ctrl+l clear"
 		}
 	case ViewExport:
-		hints = "↑/↓ select · enter export · q quit"
+		hints = "↑/↓ select · enter export"
 	case ViewWrapped:
-		hints = "w/m/y switch period · q quit"
+		hints = "w week · m month · y year"
 	}
-	line := ui.Footer.Render(hints)
+	base := ui.FootStyle.Render(hints)
+	right := ui.Dim.Render("q quit")
+	status := ""
 	if m.status != "" {
-		line += "  " + ui.Dim.Render("· "+m.status)
+		status = "  " + ui.Dim.Render("· "+m.status)
 	}
-	return line
+	return ui.FooterBar(m.width, base+status, right)
 }
 
 // Small helpers
@@ -575,9 +599,3 @@ func max(a, b int) int {
 	return b
 }
 
-// ResolveExportPath returns an export dir rooted at cfg.ExportDir, creating the
-// final path used by the export package.
-func (m *Model) ExportDir() string { return filepath.Clean(m.cfg.ExportDir) }
-
-// Ensure import used.
-var _ = export.Options{}

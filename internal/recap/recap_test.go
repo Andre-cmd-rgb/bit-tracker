@@ -89,3 +89,39 @@ func TestAggregateEmpty(t *testing.T) {
 		t.Fatalf("takeaway wrong: %q", s.Takeaway)
 	}
 }
+
+func TestRangeMonthAndYear(t *testing.T) {
+	anchor := time.Date(2026, 4, 15, 0, 0, 0, 0, time.UTC)
+
+	fromM, toM := Range(PeriodMonth, anchor)
+	if fromM.Day() != 1 || fromM.Month() != 4 {
+		t.Fatalf("month start wrong: %v", fromM)
+	}
+	if toM.Day() != 30 || toM.Month() != 4 {
+		t.Fatalf("month end wrong: %v", toM)
+	}
+
+	fromY, toY := Range(PeriodYear, anchor)
+	if fromY.Month() != 1 || fromY.Day() != 1 || fromY.Year() != 2026 {
+		t.Fatalf("year start wrong: %v", fromY)
+	}
+	if toY.Month() != 12 || toY.Day() != 31 || toY.Year() != 2026 {
+		t.Fatalf("year end wrong: %v", toY)
+	}
+}
+
+func TestAggregateYearSpansAllMonths(t *testing.T) {
+	from, to := Range(PeriodYear, time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC))
+	entries := []diary.Entry{
+		mkEntry(time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC), 8, 120, 15, 45, []string{"focus"}, false, true, ""),
+		mkEntry(time.Date(2026, 5, 10, 0, 0, 0, 0, time.UTC), 3, 0, 200, 0, nil, true, false, "wasted time"),
+		mkEntry(time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC), 9, 180, 0, 120, []string{"coding"}, false, true, "shipped"),
+	}
+	s := Aggregate(PeriodYear, from, to, entries)
+	if s.TotalEntries != 3 {
+		t.Fatalf("expected 3 entries across year")
+	}
+	if s.GoodDays != 2 || s.BadDays != 1 {
+		t.Fatalf("good=%d bad=%d", s.GoodDays, s.BadDays)
+	}
+}

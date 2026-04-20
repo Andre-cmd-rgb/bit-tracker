@@ -127,3 +127,45 @@ func TestIntroSingleDigitDay(t *testing.T) {
 		t.Fatalf("intro wrong: %q", got)
 	}
 }
+
+func TestEmptyEntryIsNotScored(t *testing.T) {
+	// Fresh-from-intro entry: no metrics, only the auto intro block.
+	ts := time.Date(2026, 4, 20, 7, 14, 0, 0, time.UTC)
+	e := Entry{RawText: Intro(ts)}
+	if !IsEmpty(e) {
+		t.Fatal("fresh intro-only entry should be empty")
+	}
+	bad, good := Score(e)
+	if bad || good {
+		t.Fatalf("empty entry should not score: bad=%v good=%v", bad, good)
+	}
+}
+
+func TestEntryWithBodyIsScored(t *testing.T) {
+	ts := time.Date(2026, 4, 20, 7, 14, 0, 0, time.UTC)
+	e := Entry{RawText: Intro(ts) + "scrolled all day did nothing"}
+	if IsEmpty(e) {
+		t.Fatal("entry with body should not be empty")
+	}
+	// All numeric metrics are zero → 3 bad hits (study<60, project==0, phrase) → bad day.
+	bad, _ := Score(e)
+	if !bad {
+		t.Fatal("expected bad day for empty metrics + bad phrase")
+	}
+}
+
+func TestBadDaysInWindow(t *testing.T) {
+	now := time.Date(2026, 4, 20, 0, 0, 0, 0, time.UTC)
+	entries := []Entry{
+		{Date: now.AddDate(0, 0, -6), IsBadDay: true},
+		{Date: now.AddDate(0, 0, -5), IsGoodDay: true},
+		{Date: now.AddDate(0, 0, -4), IsBadDay: true},
+		{Date: now.AddDate(0, 0, -3), IsBadDay: true},
+		{Date: now.AddDate(0, 0, -2)},
+		{Date: now.AddDate(0, 0, -1), IsBadDay: true},
+		{Date: now},
+	}
+	if got := BadDaysIn(entries, 7); got != 4 {
+		t.Fatalf("BadDaysIn(7) = %d, want 4", got)
+	}
+}

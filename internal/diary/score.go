@@ -43,9 +43,69 @@ func HasBadPhrase(raw string) bool { return containsAny(raw, badPhrases) }
 // HasGoodPhrase reports whether raw text contains any positive signal.
 func HasGoodPhrase(raw string) bool { return containsAny(raw, goodPhrases) }
 
+// IsEmpty reports whether the entry has no user input yet (only the auto intro).
+// Empty entries are never scored.
+func IsEmpty(e Entry) bool {
+	if e.Mood != 0 || e.StudyMinutes != 0 || e.ScrollMinutes != 0 || e.ProjectMinutes != 0 {
+		return false
+	}
+	if len(e.Tags) > 0 || strings.TrimSpace(e.ProjectName) != "" || strings.TrimSpace(e.ProjectNote) != "" {
+		return false
+	}
+	// Strip the intro; if any non-blank remains, the entry has content.
+	body := stripAutoIntro(e.RawText)
+	return strings.TrimSpace(body) == ""
+}
+
+func stripAutoIntro(s string) string {
+	lines := strings.Split(s, "\n")
+	i := 0
+	for i < len(lines) {
+		t := strings.TrimSpace(lines[i])
+		if t == "" || t == "today:" || isIntroStartedAt(t) || isIntroDateHeader(t) {
+			i++
+			continue
+		}
+		break
+	}
+	return strings.Join(lines[i:], "\n")
+}
+
+func isIntroStartedAt(line string) bool {
+	if !strings.HasPrefix(line, "started at ") {
+		return false
+	}
+	rest := strings.TrimPrefix(line, "started at ")
+	if len(rest) != 5 || rest[2] != ':' {
+		return false
+	}
+	for i, r := range rest {
+		if i == 2 {
+			continue
+		}
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func isIntroDateHeader(line string) bool {
+	for _, w := range []string{"monday,", "tuesday,", "wednesday,", "thursday,", "friday,", "saturday,", "sunday,"} {
+		if strings.HasPrefix(line, w+" ") {
+			return true
+		}
+	}
+	return false
+}
+
 // Score computes deterministic good/bad day labels.
 // Returns (isBad, isGood). Both can be false; both cannot be true.
+// Empty entries (no user input) are always (false, false).
 func Score(e Entry) (bool, bool) {
+	if IsEmpty(e) {
+		return false, false
+	}
 	badHits := 0
 	if e.Mood > 0 && e.Mood <= 4 {
 		badHits++
