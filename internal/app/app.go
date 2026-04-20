@@ -1,11 +1,8 @@
+// Package app is the Bubble Tea model that wires every view together.
 package app
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
-	"runtime"
-	"sort"
 	"strings"
 	"time"
 
@@ -15,529 +12,590 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/andre-cmd-rgb/bit-tracker/internal/ai"
-	"github.com/andre-cmd-rgb/bit-tracker/internal/config"
-	"github.com/andre-cmd-rgb/bit-tracker/internal/db"
-	"github.com/andre-cmd-rgb/bit-tracker/internal/models"
+	"github.com/andre-cmd-rgb/bit-tracker/internal/diary"
+	"github.com/andre-cmd-rgb/bit-tracker/internal/recap"
 	"github.com/andre-cmd-rgb/bit-tracker/internal/ui"
 )
 
 type View int
 
 const (
-	ViewDashboard View = iota
-	ViewGoals
-	ViewMood
-	ViewJournal
+	ViewToday View = iota
+	ViewHistory
 	ViewChat
-	ViewSettings
-	ViewFirstRun
+	ViewExport
+	ViewWrapped
 )
 
-// NavViews are the views exposed in the top tab bar (first-run excluded).
-var NavViews = []View{ViewDashboard, ViewGoals, ViewMood, ViewJournal, ViewChat, ViewSettings}
+var viewNames = []string{"today", "history", "chat", "export", "wrapped"}
 
-type Mode int
-
-const (
-	ModeNormal Mode = iota
-	ModeGoalNew
-	ModeGoalEdit
-	ModeTodoNew
-	ModeJournalEdit
-	ModeMoodNote
-	ModeGoalFilter
-	ModeSettingsInput
-)
-
-type GoalSubTab int
-
-const (
-	TabGoals GoalSubTab = iota
-	TabTodos
-)
+type Config struct {
+	DataDir   string
+	ExportDir string
+	ModelPath string
+}
 
 type Model struct {
-	cfg     *config.Config
-	store   *db.Store
-	runtime *ai.Runtime
+	cfg    Config
+	repo   *diary.Repo
+	engine ai.Engine
 
-	view   View
-	width  int
-	height int
+	width, height int
+	view          View
+	status        string
 
-	// dashboard / shared
-	goals         []models.Goal
-	goalHistory   map[int64][]models.GoalProgressPoint
-	moods         []models.MoodLog
-	todayMood     *models.MoodLog
-	journal       []models.JournalEntry
-	todos         []models.Todo
-	chatMsgs      []models.ChatMessage
-	streak        int
-	goalIdx       int
-	todoIdx       int
-	journalIdx    int
-	goalTab       GoalSubTab
-	filter        string
+	// today
+	today     diary.Entry
+	editing   bool
+	editor    textarea.Model
+	metaIdx   int // focused metadata field while not editing
+	meta      todayMeta
 
-	// pet animation
-	petState ui.PetState
-	petFrame int
-
-	// modes / input
-	mode      Mode
-	textInput textinput.Model
-	textArea  textarea.Model
-	moodScore int
-	editingID int64
-
-	// status
-	toast     string
-	errMsg    string
-	aiStatus  string
-	ready     bool
-
-	// first-run
-	firstRun      firstRunState
-	downloadState downloadUIState
+	// history
+	history       []diary.Entry
+	historyIdx    int
+	historyMode   historyMode
+	searchInput   textinput.Model
+	activeFilter  string
+	filterIsTag   bool
+	viewingEntry  *diary.Entry
 
 	// chat
+	chat       []chatMessage
 	chatInput  textinput.Model
-	chatScroll int
-	streaming  bool
-	streamBuf  string
-	send       func(tea.Msg)
+	chatMode   string // "rewrite" "reflect" "wake_up" "chat"
+	generating bool
 
-	progressCh chan ai.DownloadProgress
+	// export
+	exportIdx int
 
-	// settings view
-	settingsIdx settingsCursor
+	// wrapped
+	wrappedPeriod recap.Period
+	summary       recap.Summary
 }
 
-type firstRunState struct {
-	step      int // 0=welcome, 1=model pick, 2=downloading, 3=done
-	picked    int
-	skipAI    bool
-	ramGB     int
+type chatMessage struct {
+	role string // user | ai | system
+	text string
+	mode string
+	time time.Time
 }
 
-type downloadUIState struct {
-	label    string
-	received int64
-	total    int64
-	modelDone bool
-	binDone   bool
-	err      error
+type historyMode int
+
+const (
+	historyList historyMode = iota
+	historyView
+	historySearch
+)
+
+type todayMeta struct {
+	Mood, Study, Scroll, Project string
+	Tags                         string
+	ProjectName, ProjectNote     string
+	Completed                    bool
 }
 
-func New(cfg *config.Config, store *db.Store, runtime *ai.Runtime) *Model {
-	ti := textinput.New()
-	ti.Prompt = "› "
-	ti.CharLimit = 256
-	ti.Width = 60
-
+func NewModel(cfg Config, repo *diary.Repo, engine ai.Engine) *Model {
 	ta := textarea.New()
-	ta.Placeholder = "Write freely. Esc to save."
+	ta.Placeholder = "write…"
+	ta.Prompt = ""
 	ta.ShowLineNumbers = false
-	ta.SetWidth(60)
-	ta.SetHeight(10)
+	ta.CharLimit = 0
+	ta.SetWidth(80)
+	ta.SetHeight(18)
+
+	si := textinput.New()
+	si.Placeholder = "search…"
+	si.CharLimit = 120
 
 	ci := textinput.New()
-	ci.Prompt = "you › "
-	ci.CharLimit = 2000
+	ci.Placeholder = "ask bit-tracker…"
+	ci.CharLimit = 500
 
 	m := &Model{
-		cfg:         cfg,
-		store:       store,
-		runtime:     runtime,
-		view:        ViewDashboard,
-		textInput:   ti,
-		textArea:    ta,
-		chatInput:   ci,
-		goalHistory: map[int64][]models.GoalProgressPoint{},
-		petState:    ui.PetHappy,
-		aiStatus:    "offline",
-		firstRun:    firstRunState{ramGB: detectRAMGB()},
-	}
-	if !cfg.FirstRunDone {
-		m.view = ViewFirstRun
-		m.firstRun.picked = ai.RecommendTier(m.firstRun.ramGB)
+		cfg:           cfg,
+		repo:          repo,
+		engine:        engine,
+		view:          ViewToday,
+		editor:        ta,
+		searchInput:   si,
+		chatInput:     ci,
+		chatMode:      "chat",
+		wrappedPeriod: recap.PeriodWeek,
 	}
 	return m
 }
 
 func (m *Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{
-		tick(),
-		loadGoals(m.store),
-		loadMoods(m.store, 30),
-		loadTodayMood(m.store),
-		loadJournal(m.store),
-		loadTodos(m.store),
-		loadChat(m.store),
-		loadStreak(m.store),
-	}
-	if m.cfg.FirstRunDone && m.runtime.Available() {
-		m.aiStatus = "starting"
-		cmds = append(cmds, startRuntime(m.runtime))
-	}
-	return tea.Batch(cmds...)
+	return tea.Batch(
+		m.loadToday(time.Now()),
+		m.loadHistory(),
+		m.loadEngine(),
+	)
 }
 
-// SetSend stores a sender for cross-goroutine messages (used for streaming).
-func (m *Model) SetSend(s func(tea.Msg)) { m.send = s }
+// ---- messages ----
+
+type todayLoadedMsg struct {
+	entry   diary.Entry
+	created bool
+}
+type historyLoadedMsg struct{ entries []diary.Entry }
+type entryViewMsg struct{ entry diary.Entry }
+type savedMsg struct{ entry diary.Entry }
+type errMsg struct{ err error }
+type statusMsg string
+type aiResultMsg struct {
+	mode string
+	text string
+	err  error
+}
+type modelLoadedMsg struct{ err error }
+type summaryMsg struct{ summary recap.Summary }
+
+// ---- commands ----
+
+func (m *Model) loadToday(now time.Time) tea.Cmd {
+	return func() tea.Msg {
+		e, created, err := m.repo.GetOrCreateToday(now)
+		if err != nil {
+			return errMsg{err}
+		}
+		return todayLoadedMsg{entry: e, created: created}
+	}
+}
+
+func (m *Model) loadHistory() tea.Cmd {
+	return func() tea.Msg {
+		es, err := m.repo.List(time.Time{}, time.Time{})
+		if err != nil {
+			return errMsg{err}
+		}
+		return historyLoadedMsg{entries: es}
+	}
+}
+
+func (m *Model) loadEngine() tea.Cmd {
+	if m.engine == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		err := m.engine.LoadModel(m.cfg.ModelPath)
+		return modelLoadedMsg{err: err}
+	}
+}
+
+func (m *Model) saveToday() tea.Cmd {
+	m.applyMetaToEntry(&m.today)
+	m.today.RawText = m.editor.Value()
+	entry := m.today
+	return func() tea.Msg {
+		if err := m.repo.Save(&entry); err != nil {
+			return errMsg{err}
+		}
+		return savedMsg{entry: entry}
+	}
+}
+
+func (m *Model) aiRun(mode string, recent []diary.Entry, target diary.Entry) tea.Cmd {
+	engine := m.engine
+	tone := diary.CurrentTone(recent)
+	return func() tea.Msg {
+		if engine == nil {
+			return aiResultMsg{mode: mode, err: ai.ErrUnavailable}
+		}
+		var text string
+		var err error
+		switch mode {
+		case "rewrite":
+			text, err = engine.RewriteEntry(target)
+		case "reflect":
+			text, err = engine.ReflectRecent(recent, tone)
+		case "wake_up":
+			text, err = engine.WakeUp(recent)
+		default:
+			text, err = engine.Generate(target.RawText, ai.DefaultOptions())
+		}
+		return aiResultMsg{mode: mode, text: text, err: err}
+	}
+}
+
+func (m *Model) computeSummary(period recap.Period) tea.Cmd {
+	entries := append([]diary.Entry(nil), m.history...)
+	return func() tea.Msg {
+		now := time.Now()
+		from, to := recap.Range(period, now)
+		var scoped []diary.Entry
+		for _, e := range entries {
+			if (e.Date.Equal(from) || e.Date.After(from)) && (e.Date.Equal(to) || e.Date.Before(to.AddDate(0, 0, 1))) {
+				scoped = append(scoped, e)
+			}
+		}
+		return summaryMsg{summary: recap.Aggregate(period, from, to, scoped)}
+	}
+}
+
+// ---- Update ----
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch v := msg.(type) {
+	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width, m.height = v.Width, v.Height
-		m.textArea.SetWidth(v.Width / 2)
-		m.textArea.SetHeight(v.Height - 10)
-		m.chatInput.Width = v.Width - 20
+		m.width, m.height = msg.Width, msg.Height
+		editorW := max(40, msg.Width-60) // leave room for the metrics card
+		if msg.Width < 110 {
+			editorW = max(40, msg.Width-8)
+		}
+		m.editor.SetWidth(editorW)
+		m.editor.SetHeight(max(10, msg.Height-16))
+		m.searchInput.Width = max(20, msg.Width-20)
+		m.chatInput.Width = max(20, msg.Width-12)
 		return m, nil
-	case tickMsg:
-		m.petFrame++
-		m.petState = m.derivePetState()
-		return m, tick()
-	case toastMsg:
-		m.toast = v.text
-		return m, clearToastLater()
-	case clearToastMsg:
-		m.toast = ""
+
+	case todayLoadedMsg:
+		m.today = msg.entry
+		m.editor.SetValue(msg.entry.RawText)
+		m.editor.CursorEnd()
+		m.syncMetaFromEntry()
+		if msg.created {
+			m.status = "new entry created for today"
+		}
 		return m, nil
+
+	case historyLoadedMsg:
+		m.history = msg.entries
+		if m.historyIdx >= len(m.history) {
+			m.historyIdx = max(0, len(m.history)-1)
+		}
+		return m, m.computeSummary(m.wrappedPeriod)
+
+	case savedMsg:
+		m.today = msg.entry
+		m.status = "saved"
+		return m, m.loadHistory()
+
+	case summaryMsg:
+		m.summary = msg.summary
+		return m, nil
+
+	case modelLoadedMsg:
+		if msg.err != nil {
+			m.status = "model unavailable — running without AI"
+		} else {
+			m.status = "model loaded"
+		}
+		return m, nil
+
+	case aiResultMsg:
+		m.generating = false
+		if msg.err != nil {
+			m.chat = append(m.chat, chatMessage{role: "system", text: "ai: " + msg.err.Error(), mode: msg.mode, time: time.Now()})
+		} else {
+			m.chat = append(m.chat, chatMessage{role: "ai", text: msg.text, mode: msg.mode, time: time.Now()})
+			_ = m.repo.LogAIMessage(m.today.ID, msg.mode, "", msg.text)
+		}
+		return m, nil
+
 	case errMsg:
-		m.errMsg = v.err.Error()
-		return m, clearToastLater()
-	case dbOKMsg:
-		return m, tea.Batch(
-			toastCmd(v.label),
-			loadGoals(m.store),
-			loadMoods(m.store, 30),
-			loadTodayMood(m.store),
-			loadJournal(m.store),
-			loadTodos(m.store),
-			loadStreak(m.store),
-		)
-	case goalsLoadedMsg:
-		m.goals = v.goals
-		if m.goalIdx >= len(m.goals) {
-			m.goalIdx = 0
-		}
-		if len(m.goals) > 0 {
-			g := m.goals[m.goalIdx]
-			return m, loadGoalHistory(m.store, g.ID)
-		}
+		m.status = "error: " + msg.err.Error()
 		return m, nil
-	case goalHistoryMsg:
-		m.goalHistory[v.goalID] = v.points
-		return m, nil
-	case moodsLoadedMsg:
-		m.moods = v.moods
-		return m, nil
-	case todayMoodMsg:
-		m.todayMood = v.mood
-		return m, nil
-	case journalLoadedMsg:
-		m.journal = v.entries
-		if m.journalIdx >= len(m.journal) {
-			m.journalIdx = 0
-		}
-		return m, nil
-	case todosLoadedMsg:
-		m.todos = v.todos
-		if m.todoIdx >= len(m.todos) {
-			m.todoIdx = 0
-		}
-		return m, nil
-	case chatLoadedMsg:
-		m.chatMsgs = v.msgs
-		return m, nil
-	case streakMsg:
-		m.streak = v.streak
-		return m, nil
-	case aiReadyMsg:
-		m.aiStatus = "ready"
-		m.ready = true
-		return m, nil
-	case aiErrMsg:
-		m.aiStatus = "offline"
-		m.errMsg = v.err.Error()
-		return m, clearToastLater()
-	case downloadProgressMsg:
-		m.downloadState.label = v.Label
-		m.downloadState.received = v.Received
-		m.downloadState.total = v.Total
-		return m, progressListener(m.progressCh)
-	case downloadDoneMsg:
-		return m.handleDownloadDone(v)
-	case streamTokenMsg:
-		m.streamBuf += v.token
-		return m, nil
-	case streamDoneMsg:
-		return m.handleStreamDone(v)
+
 	case tea.KeyMsg:
-		return m.handleKey(v)
+		return m.handleKey(msg)
 	}
 	return m, nil
 }
 
-var (
-	titleBar = lipgloss.NewStyle().Foreground(ui.ColorPrimary).Bold(true)
-)
+func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Ctrl+C always exits, even when inputs are focused.
+	if msg.Type == tea.KeyCtrlC {
+		return m, tea.Quit
+	}
+
+	// Text-input focus paths first.
+	if m.view == ViewToday && m.editing {
+		switch msg.String() {
+		case "esc":
+			m.editing = false
+			return m, m.saveToday()
+		case "ctrl+s":
+			return m, m.saveToday()
+		}
+		var cmd tea.Cmd
+		m.editor, cmd = m.editor.Update(msg)
+		return m, cmd
+	}
+
+	if m.view == ViewHistory && m.historyMode == historySearch {
+		switch msg.String() {
+		case "esc":
+			m.historyMode = historyList
+			m.searchInput.Blur()
+			m.activeFilter = ""
+			m.filterIsTag = false
+			return m, m.loadHistory()
+		case "enter":
+			q := strings.TrimSpace(m.searchInput.Value())
+			m.historyMode = historyList
+			m.searchInput.Blur()
+			if q == "" {
+				m.activeFilter = ""
+				return m, m.loadHistory()
+			}
+			m.activeFilter = q
+			if strings.HasPrefix(q, "#") {
+				tag := strings.TrimPrefix(q, "#")
+				m.filterIsTag = true
+				return m, m.searchHistory("", tag)
+			}
+			m.filterIsTag = false
+			return m, m.searchHistory(q, "")
+		}
+		var cmd tea.Cmd
+		m.searchInput, cmd = m.searchInput.Update(msg)
+		return m, cmd
+	}
+
+	if m.view == ViewChat && m.chatInput.Focused() {
+		switch msg.String() {
+		case "esc":
+			m.chatInput.Blur()
+			return m, nil
+		case "enter":
+			text := strings.TrimSpace(m.chatInput.Value())
+			if text == "" {
+				return m, nil
+			}
+			m.chat = append(m.chat, chatMessage{role: "user", text: text, mode: m.chatMode, time: time.Now()})
+			m.chatInput.SetValue("")
+			m.generating = true
+			target := m.today
+			target.RawText = text
+			return m, m.aiRun(m.chatMode, m.recentEntries(14), target)
+		}
+		var cmd tea.Cmd
+		m.chatInput, cmd = m.chatInput.Update(msg)
+		return m, cmd
+	}
+
+	// Global shortcuts
+	switch msg.String() {
+	case "ctrl+c", "q":
+		return m, tea.Quit
+	case "t":
+		m.view = ViewToday
+		return m, nil
+	case "h":
+		m.view = ViewHistory
+		return m, nil
+	case "c":
+		m.view = ViewChat
+		return m, nil
+	case "e":
+		m.view = ViewExport
+		return m, nil
+	case "w":
+		m.view = ViewWrapped
+		return m, m.computeSummary(m.wrappedPeriod)
+	case "tab":
+		m.view = View((int(m.view) + 1) % len(viewNames))
+		if m.view == ViewWrapped {
+			return m, m.computeSummary(m.wrappedPeriod)
+		}
+		return m, nil
+	case "shift+tab":
+		m.view = View((int(m.view) + len(viewNames) - 1) % len(viewNames))
+		if m.view == ViewWrapped {
+			return m, m.computeSummary(m.wrappedPeriod)
+		}
+		return m, nil
+	}
+
+	// Per-view keys
+	switch m.view {
+	case ViewToday:
+		return m.handleTodayKey(msg)
+	case ViewHistory:
+		return m.handleHistoryKey(msg)
+	case ViewChat:
+		return m.handleChatKey(msg)
+	case ViewExport:
+		return m.handleExportKey(msg)
+	case ViewWrapped:
+		return m.handleWrappedKey(msg)
+	}
+	return m, nil
+}
+
+func (m *Model) recentEntries(n int) []diary.Entry {
+	if len(m.history) <= n {
+		return append([]diary.Entry(nil), m.history...)
+	}
+	return append([]diary.Entry(nil), m.history[len(m.history)-n:]...)
+}
+
+func (m *Model) searchHistory(keyword, tag string) tea.Cmd {
+	return func() tea.Msg {
+		es, err := m.repo.Search(keyword, tag)
+		if err != nil {
+			return errMsg{err}
+		}
+		// repo.Search returns DESC; keep that ordering for list
+		return historyLoadedMsg{entries: reverse(es)}
+	}
+}
+
+// ---- View ----
 
 func (m *Model) View() string {
 	if m.width == 0 {
-		return "starting..."
+		return "loading…"
 	}
-	if m.view == ViewFirstRun {
-		return m.viewFirstRun()
-	}
-	header := m.renderHeader()
-	body := ""
+	header := m.header()
+	footer := m.footer()
+	var body string
 	switch m.view {
-	case ViewDashboard:
-		body = m.viewDashboard()
-	case ViewGoals:
-		body = m.viewGoals()
-	case ViewMood:
-		body = m.viewMood()
-	case ViewJournal:
-		body = m.viewJournal()
+	case ViewToday:
+		body = m.viewToday()
+	case ViewHistory:
+		body = m.viewHistory()
 	case ViewChat:
 		body = m.viewChat()
-	case ViewSettings:
-		body = m.viewSettings()
+	case ViewExport:
+		body = m.viewExport()
+	case ViewWrapped:
+		body = m.viewWrapped()
 	}
-	status := m.renderStatus()
-	return lipgloss.JoinVertical(lipgloss.Left, header, body, status)
+	return ui.Frame(m.width, m.height, header, body, footer)
 }
 
-func (m *Model) renderHeader() string {
-	tabs := []string{
-		"1·Dashboard",
-		"2·Goals",
-		"3·Mood",
-		"4·Journal",
-		"5·Bit",
-		"6·Settings",
-	}
-	var parts []string
-	for i, t := range tabs {
-		label := " " + t + " "
-		if int(m.view) == i {
-			parts = append(parts, ui.StyleTabActive.Render(label))
-		} else {
-			parts = append(parts, ui.StyleTabInactive.Render(label))
+func (m *Model) header() string {
+	tabs := make([]string, 0, len(viewNames))
+	for i, name := range viewNames {
+		style := ui.Nav
+		if View(i) == m.view {
+			style = ui.NavActive
 		}
+		tabs = append(tabs, style.Render(name))
 	}
-	left := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
-	right := ui.StyleGold.Render(" bit-tracker ")
-	space := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if space < 1 {
-		space = 1
+	tone := diary.CurrentTone(m.history)
+	toneLabel := ""
+	switch tone {
+	case diary.ToneReflective:
+		toneLabel = "  " + ui.Dim.Render("· reflective tone")
+	case diary.ToneHarsh:
+		toneLabel = "  " + ui.Warn.Render("· harsh mode")
+	case diary.ToneIntervention:
+		toneLabel = "  " + ui.Warn.Render("· intervention")
 	}
-	bar := left + strings.Repeat(" ", space) + right
-	sep := lipgloss.NewStyle().Foreground(ui.ColorBorder).Render(strings.Repeat("─", m.width))
-	return bar + "\n" + sep
+	model := ""
+	if m.engine != nil && m.engine.Available() {
+		model = "  " + ui.Good.Render("· model on")
+	} else {
+		model = "  " + ui.Dim.Render("· no model")
+	}
+	left := ui.Title.Render("bit-tracker") +
+		"  " + ui.Dim.Render(strings.ToLower(time.Now().Format("Mon 02 Jan 2006"))) +
+		toneLabel + model
+	return lipgloss.JoinVertical(lipgloss.Left,
+		left,
+		strings.Join(tabs, " "),
+		ui.HRule(m.width),
+	)
 }
 
-func (m *Model) renderStatus() string {
-	keys := "tab/←→ switch · 1-6 jump · q quit"
+func (m *Model) footer() string {
+	var hints string
 	switch m.view {
-	case ViewGoals:
-		keys = "↑↓ select · n new · e edit · d del · +/- prog · c done · t todos · / filter"
-	case ViewMood:
-		keys = "1-5 score · enter log · n note"
-	case ViewJournal:
-		keys = "↑↓ select · n new · enter open · esc save · ctrl+b reflect"
-	case ViewChat:
-		if m.streaming {
-			keys = "Bit is typing... · esc back"
+	case ViewToday:
+		if m.editing {
+			hints = "esc save & leave · ctrl+s save"
 		} else {
-			keys = "type & enter to send · esc back"
+			hints = "enter edit · r rewrite · m mood · s +15 study · p +15 project · o +15 scroll · x project done"
 		}
-	case ViewSettings:
-		keys = "↑↓ select · enter activate · esc cancel"
-	}
-	if m.mode != ModeNormal {
-		keys = "enter ok · esc cancel"
-	}
-	sb := ui.StatusBar{
-		Width:   m.width,
-		Mode:    viewName(m.view),
-		Keys:    keys,
-		Toast:   m.currentToast(),
-		AIState: "AI: " + m.aiStatus,
-	}
-	return sb.Render()
-}
-
-func (m *Model) currentToast() string {
-	if m.errMsg != "" {
-		return "⚠ " + m.errMsg
-	}
-	return m.toast
-}
-
-func viewName(v View) string {
-	switch v {
-	case ViewDashboard:
-		return "Dashboard"
-	case ViewGoals:
-		return "Goals"
-	case ViewMood:
-		return "Mood"
-	case ViewJournal:
-		return "Journal"
+	case ViewHistory:
+		switch m.historyMode {
+		case historySearch:
+			hints = "enter search · esc cancel · # prefix = tag"
+		case historyView:
+			hints = "esc back · m markdown · H html"
+		default:
+			hints = "↑/↓ move · enter open · / search"
+		}
 	case ViewChat:
-		return "Bit"
-	case ViewSettings:
-		return "Settings"
+		if m.chatInput.Focused() {
+			hints = "enter send · esc unfocus"
+		} else {
+			hints = "i type · r rewrite · f reflect · u wake up · ctrl+l clear"
+		}
+	case ViewExport:
+		hints = "↑/↓ select · enter export"
+	case ViewWrapped:
+		hints = "w week · m month · y year"
 	}
-	return ""
+	base := ui.FootStyle.Render(hints)
+	right := ui.Dim.Render("q quit")
+	status := ""
+	if m.status != "" {
+		status = "  " + ui.Dim.Render("· "+m.status)
+	}
+	return ui.FooterBar(m.width, base+status, right)
 }
 
-// --- Helpers ---
-
-func (m *Model) derivePetState() ui.PetState {
-	h := time.Now().Hour()
-	if h >= 23 || h < 6 {
-		return ui.PetSleepy
+// Small helpers
+func (m *Model) syncMetaFromEntry() {
+	m.meta = todayMeta{
+		Mood:        itoa(m.today.Mood),
+		Study:       itoa(m.today.StudyMinutes),
+		Scroll:      itoa(m.today.ScrollMinutes),
+		Project:     itoa(m.today.ProjectMinutes),
+		Tags:        strings.Join(m.today.Tags, ","),
+		ProjectName: m.today.ProjectName,
+		ProjectNote: m.today.ProjectNote,
+		Completed:   m.today.ProjectCompleted,
 	}
-	if m.view == ViewJournal {
-		return ui.PetFocused
-	}
-	// excited: any goal completed today
-	for _, g := range m.goals {
-		if g.Status == "done" && time.Since(g.UpdatedAt) < 24*time.Hour {
-			return ui.PetExcited
-		}
-	}
-	// sad: no activity last 48h (no mood logs, no journal, no chat)
-	recent := false
-	for _, mm := range m.moods {
-		if time.Since(mm.LoggedAt) < 48*time.Hour {
-			recent = true
-			break
-		}
-	}
-	if !recent {
-		for _, j := range m.journal {
-			if time.Since(j.UpdatedAt) < 48*time.Hour {
-				recent = true
-				break
-			}
-		}
-	}
-	if !recent && len(m.moods) == 0 && len(m.journal) == 0 {
-		// first run; don't label sad
-		return ui.PetHappy
-	}
-	if !recent {
-		return ui.PetSad
-	}
-	return ui.PetHappy
 }
 
-func (m *Model) handleDownloadDone(v downloadDoneMsg) (tea.Model, tea.Cmd) {
-	if v.err != nil {
-		m.downloadState.err = v.err
-		m.errMsg = v.err.Error()
-		return m, clearToastLater()
-	}
-	if strings.HasPrefix(v.kind, "model:") {
-		fname := strings.TrimPrefix(v.kind, "model:")
-		m.cfg.ModelPath = filepath.Join(m.cfg.DataDir, "models", fname)
-		m.cfg.ModelName = fname
-		m.downloadState.modelDone = true
-	}
-	if v.kind == "bin" {
-		m.downloadState.binDone = true
-	}
-	if m.downloadState.modelDone && m.downloadState.binDone {
-		m.cfg.FirstRunDone = true
-		_ = m.cfg.Save()
-		m.view = ViewDashboard
-		return m, tea.Batch(toastCmd("setup complete"), startRuntime(m.runtime))
-	}
-	// start binary download after model
-	if m.downloadState.modelDone && !m.downloadState.binDone {
-		ch := make(chan ai.DownloadProgress, 32)
-		m.progressCh = ch
-		return m, tea.Batch(
-			downloadBinaryCmd(m.cfg.LlamaBin, m.cfg.DataDir, ch),
-			progressListener(ch),
-		)
-	}
-	return m, nil
+func (m *Model) applyMetaToEntry(e *diary.Entry) {
+	e.Mood = parseInt(m.meta.Mood)
+	e.StudyMinutes = parseInt(m.meta.Study)
+	e.ScrollMinutes = parseInt(m.meta.Scroll)
+	e.ProjectMinutes = parseInt(m.meta.Project)
+	e.Tags = diary.SplitTags(m.meta.Tags)
+	e.ProjectName = strings.TrimSpace(m.meta.ProjectName)
+	e.ProjectNote = strings.TrimSpace(m.meta.ProjectNote)
+	e.ProjectCompleted = m.meta.Completed
 }
 
-func (m *Model) handleStreamDone(v streamDoneMsg) (tea.Model, tea.Cmd) {
-	m.streaming = false
-	if v.err != nil {
-		m.errMsg = v.err.Error()
-		return m, clearToastLater()
-	}
-	actions, clean := ai.ExtractActions(m.streamBuf)
-	m.streamBuf = ""
+func itoa(n int) string { return fmt.Sprintf("%d", n) }
 
-	var summaries []string
-	for _, a := range actions {
-		s, err := ai.ApplyAction(m.store, a)
-		if err == nil && s != "" {
-			summaries = append(summaries, s)
+func parseInt(s string) int {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	n := 0
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return n
 		}
+		n = n*10 + int(r-'0')
 	}
-	_ = m.store.AppendChat("assistant", clean)
-	m.chatMsgs = append(m.chatMsgs, models.ChatMessage{Role: "assistant", Content: clean, CreatedAt: time.Now()})
-
-	cmds := []tea.Cmd{
-		loadGoals(m.store),
-		loadTodos(m.store),
-		loadMoods(m.store, 30),
-		loadJournal(m.store),
-	}
-	if len(summaries) > 0 {
-		cmds = append(cmds, toastCmd(strings.Join(summaries, " · ")))
-	}
-	return m, tea.Batch(cmds...)
+	return n
 }
 
-// --- helpers for sorting ---
-
-func topActiveGoals(goals []models.Goal, n int) []models.Goal {
-	out := make([]models.Goal, 0, n)
-	for _, g := range goals {
-		if g.Status != "done" {
-			out = append(out, g)
-		}
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		return out[i].UpdatedAt.After(out[j].UpdatedAt)
-	})
-	if len(out) > n {
-		out = out[:n]
+func reverse(in []diary.Entry) []diary.Entry {
+	out := make([]diary.Entry, len(in))
+	for i, e := range in {
+		out[len(in)-1-i] = e
 	}
 	return out
 }
 
-// ramGB with safe fallback
-func detectRAMGB() int {
-	// avoid external deps; best-effort read from /proc/meminfo on linux
-	if runtime.GOOS == "linux" {
-		if b, err := readFileSafe("/proc/meminfo"); err == nil {
-			for _, line := range strings.Split(string(b), "\n") {
-				if strings.HasPrefix(line, "MemTotal:") {
-					var kb int
-					fmt.Sscanf(line, "MemTotal: %d kB", &kb)
-					return kb / 1024 / 1024
-				}
-			}
-		}
+func max(a, b int) int {
+	if a > b {
+		return a
 	}
-	return 8
+	return b
 }
 
-func readFileSafe(path string) ([]byte, error) {
-	return os.ReadFile(path)
-}

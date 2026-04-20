@@ -1,6 +1,12 @@
 /bit-tracker
+/dist
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
-/dist
+/data/*
+/exports/*
+/models/*
+!/data/.keep
+!/exports/.keep
+!/models/.keep

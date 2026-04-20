@@ -3,145 +3,122 @@ package app
 import (
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/andre-cmd-rgb/bit-tracker/internal/ai"
+	"github.com/andre-cmd-rgb/bit-tracker/internal/diary"
 	"github.com/andre-cmd-rgb/bit-tracker/internal/ui"
 )
 
-var (
-	bubbleBit = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(ui.ColorPrimary).
-			Foreground(ui.ColorText).
-			Padding(0, 1).
-			MarginRight(4)
-	bubbleUser = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(ui.ColorGold).
-			Foreground(ui.ColorText).
-			Padding(0, 1).
-			MarginLeft(4)
-	chatInputPanelIdle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(ui.ColorPrimary).
-				Padding(0, 1)
-	chatInputPanelLocked = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(ui.ColorMuted).
-				Padding(0, 1)
-)
-
-var thinkingFrames = []string{".  ", ".. ", "...", " ..", "  .", "   "}
+func (m *Model) handleChatKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.generating {
+		return m, nil
+	}
+	switch msg.String() {
+	case "i":
+		m.chatInput.Focus()
+		m.chatMode = "chat"
+		return m, nil
+	case "r":
+		m.chatMode = "rewrite"
+		m.generating = true
+		target := m.today
+		target.RawText = m.editor.Value()
+		if strings.TrimSpace(target.RawText) == "" {
+			target.RawText = m.today.RawText
+		}
+		return m, m.aiRun("rewrite", m.recentEntries(7), target)
+	case "f":
+		m.chatMode = "reflect"
+		m.generating = true
+		return m, m.aiRun("reflect", m.recentEntries(14), m.today)
+	case "u":
+		m.chatMode = "wake_up"
+		m.generating = true
+		return m, m.aiRun("wake_up", m.recentEntries(7), m.today)
+	case "ctrl+l":
+		m.chat = nil
+		return m, nil
+	}
+	return m, nil
+}
 
 func (m *Model) viewChat() string {
-	w, h := m.width, m.height-4
-	if w < 40 || h < 12 {
-		return "window too small"
+	tone := diary.CurrentTone(m.history)
+	toneBadge := ui.Dim.Render("tone: " + tone.String())
+	switch tone {
+	case diary.ToneHarsh, diary.ToneIntervention:
+		toneBadge = ui.Warn.Render("tone: " + tone.String())
+	case diary.ToneReflective:
+		toneBadge = ui.Acc.Render("tone: " + tone.String())
 	}
-
-	pet := ui.RenderPet(m.petState, m.petFrame)
-	petW := lipgloss.Width(pet)
-
-	bubbleMax := w - 14
-	if bubbleMax < 20 {
-		bubbleMax = 20
+	modelBadge := ui.Muted.Render("no model — grounded fallback")
+	if m.engine != nil && m.engine.Available() {
+		modelBadge = ui.Good.Render("model on")
 	}
-
-	var bubbles []string
-	for _, c := range m.chatMsgs {
-		text := c.Content
-		if c.Role == "assistant" {
-			_, clean := ai.ExtractActions(text)
-			if strings.TrimSpace(clean) == "" {
-				continue
-			}
-			bubbles = append(bubbles, renderBubble(clean, bubbleMax, false))
-		} else {
-			bubbles = append(bubbles, renderBubble(text, bubbleMax, true))
+	modes := []string{"rewrite", "reflect", "wake_up", "chat"}
+	modeLine := []string{}
+	for _, mode := range modes {
+		style := ui.Nav
+		if mode == m.chatMode {
+			style = ui.NavActive
 		}
+		modeLine = append(modeLine, style.Render(mode))
 	}
-	if m.streaming {
-		_, clean := ai.ExtractActions(m.streamBuf)
-		if strings.TrimSpace(clean) == "" {
-			clean = "bit " + thinkingFrames[m.petFrame%len(thinkingFrames)]
+
+	header := lipgloss.JoinVertical(lipgloss.Left,
+		ui.Title.Render("chat")+"   "+toneBadge+"   "+modelBadge,
+		strings.Join(modeLine, " "),
+	)
+
+	// Messages — show last N that fit.
+	maxMessages := 6
+	start := 0
+	if len(m.chat) > maxMessages {
+		start = len(m.chat) - maxMessages
+	}
+	var body strings.Builder
+	if len(m.chat) == 0 {
+		body.WriteString(ui.Muted.Render("no messages yet.\n"))
+		body.WriteString(ui.Muted.Render("r rewrite today · f reflect last 14 days · u wake up · i type a prompt"))
+	}
+	for _, msg := range m.chat[start:] {
+		var role string
+		switch msg.role {
+		case "user":
+			role = ui.Acc.Render("you")
+		case "ai":
+			role = ui.Good.Render("bit-tracker [" + msg.mode + "]")
+		default:
+			role = ui.Warn.Render("system")
 		}
-		bubbles = append(bubbles, renderBubble(clean, bubbleMax, false))
+		body.WriteString(role + "\n")
+		body.WriteString(indent(msg.text, "  ") + "\n\n")
+	}
+	if m.generating {
+		body.WriteString(ui.Acc.Render("thinking…"))
 	}
 
-	chatH := h - 9
-	if chatH < 4 {
-		chatH = 4
-	}
-	content := strings.Join(bubbles, "\n")
-	lines := strings.Split(content, "\n")
-	if len(lines) > chatH {
-		lines = lines[len(lines)-chatH:]
-	}
-	content = strings.Join(lines, "\n")
-	for len(strings.Split(content, "\n")) < chatH {
-		content = "\n" + content
-	}
-	chatPanel := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ui.ColorBorder).
-		Padding(0, 1).
-		Width(w - 2).
-		Height(chatH + 2).
-		Render(content)
-
-	// input bar
-	m.chatInput.Width = w - petW - 14
-	if m.streaming {
-		m.chatInput.Placeholder = "— locked while Bit is replying —"
+	var input string
+	if m.chatInput.Focused() {
+		input = ui.Acc.Render("❯ ") + m.chatInput.View()
 	} else {
-		m.chatInput.Placeholder = "say something to Bit"
-	}
-	var inputRendered string
-	if m.streaming {
-		inputRendered = chatInputPanelLocked.Width(w - petW - 8).Render(ui.StyleMuted.Render(m.chatInput.Placeholder))
-	} else {
-		inputRendered = chatInputPanelIdle.Width(w - petW - 8).Render(m.chatInput.View())
+		input = ui.Muted.Render("press i to type a prompt")
 	}
 
-	label := ui.StyleMuted.Render("state: " + ui.PetLabel(m.petState))
-	petBlock := lipgloss.JoinVertical(lipgloss.Center, pet, label)
-	bottom := lipgloss.JoinHorizontal(lipgloss.Top, petBlock, "  ", inputRendered)
-	return lipgloss.JoinVertical(lipgloss.Left, chatPanel, bottom)
+	return lipgloss.JoinVertical(lipgloss.Left,
+		header,
+		"",
+		body.String(),
+		"",
+		input,
+	)
 }
 
-func renderBubble(text string, max int, user bool) string {
-	wrapped := softWrap(text, max)
-	if user {
-		return lipgloss.PlaceHorizontal(max+10, lipgloss.Right, bubbleUser.Render(wrapped))
+func indent(s, prefix string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = prefix + l
 	}
-	return bubbleBit.Render(wrapped)
-}
-
-func softWrap(s string, max int) string {
-	if max < 10 {
-		max = 10
-	}
-	var out strings.Builder
-	for _, line := range strings.Split(s, "\n") {
-		runes := []rune(line)
-		for len(runes) > max {
-			cut := max
-			for i := max; i > max-12 && i > 0; i-- {
-				if runes[i] == ' ' {
-					cut = i
-					break
-				}
-			}
-			out.WriteString(string(runes[:cut]))
-			out.WriteString("\n")
-			runes = runes[cut:]
-			if len(runes) > 0 && runes[0] == ' ' {
-				runes = runes[1:]
-			}
-		}
-		out.WriteString(string(runes))
-		out.WriteString("\n")
-	}
-	return strings.TrimRight(out.String(), "\n")
+	return strings.Join(lines, "\n")
 }
