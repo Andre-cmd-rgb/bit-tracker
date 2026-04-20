@@ -1,3 +1,5 @@
+// Package ui holds Lip Gloss styles and a small set of layout helpers used
+// across views. Colors can be switched via ApplyTheme.
 package ui
 
 import "github.com/charmbracelet/lipgloss"
@@ -7,6 +9,7 @@ type Palette struct {
 	Dim     lipgloss.Color
 	Muted   lipgloss.Color
 	Accent  lipgloss.Color
+	Accent2 lipgloss.Color
 	Good    lipgloss.Color
 	Bad     lipgloss.Color
 	Warn    lipgloss.Color
@@ -14,53 +17,115 @@ type Palette struct {
 	Border  lipgloss.Color
 }
 
-var Colors = Palette{
-	Fg:      lipgloss.Color("#E6E6E6"),
-	Dim:     lipgloss.Color("#9A9A9A"),
-	Muted:   lipgloss.Color("#6A6A6A"),
-	Accent:  lipgloss.Color("#8B5CF6"),
-	Good:    lipgloss.Color("#4ADE80"),
-	Bad:     lipgloss.Color("#F87171"),
-	Warn:    lipgloss.Color("#EF4444"),
-	BgPanel: lipgloss.Color("#1A1A1A"),
-	Border:  lipgloss.Color("#333333"),
+// Themes maps a name → palette.
+var Themes = map[string]Palette{
+	"purple": {
+		Fg: "#E6E6E6", Dim: "#9A9A9A", Muted: "#6A6A6A",
+		Accent: "#8B5CF6", Accent2: "#A78BFA",
+		Good: "#4ADE80", Bad: "#F87171", Warn: "#EF4444",
+		BgPanel: "#1A1A1A", Border: "#3A2F55",
+	},
+	"green": {
+		Fg: "#E6E6E6", Dim: "#9A9A9A", Muted: "#6A6A6A",
+		Accent: "#22C55E", Accent2: "#4ADE80",
+		Good: "#86EFAC", Bad: "#F87171", Warn: "#F59E0B",
+		BgPanel: "#0F1B12", Border: "#1F3A27",
+	},
+	"amber": {
+		Fg: "#F5E9D4", Dim: "#B6A688", Muted: "#7A6A4E",
+		Accent: "#F59E0B", Accent2: "#FBBF24",
+		Good: "#A3E635", Bad: "#F87171", Warn: "#EF4444",
+		BgPanel: "#1A140A", Border: "#4A3716",
+	},
+	"cyan": {
+		Fg: "#E6F7FB", Dim: "#8EB4C2", Muted: "#4F7A85",
+		Accent: "#06B6D4", Accent2: "#22D3EE",
+		Good: "#4ADE80", Bad: "#F87171", Warn: "#F59E0B",
+		BgPanel: "#07171C", Border: "#144A58",
+	},
+	"rose": {
+		Fg: "#FBE9EF", Dim: "#C39AA8", Muted: "#7F5B69",
+		Accent: "#F43F5E", Accent2: "#FB7185",
+		Good: "#4ADE80", Bad: "#EF4444", Warn: "#F59E0B",
+		BgPanel: "#1B0D12", Border: "#4A1C2B",
+	},
 }
 
+// Colors is the current active palette. Mutated by ApplyTheme.
+var Colors = Themes["purple"]
+
+// Styles recomputed by ApplyTheme.
 var (
-	Title = lipgloss.NewStyle().Foreground(Colors.Fg).Bold(true)
-	Sub   = lipgloss.NewStyle().Foreground(Colors.Dim).Italic(true)
-	Dim   = lipgloss.NewStyle().Foreground(Colors.Dim)
-	Muted = lipgloss.NewStyle().Foreground(Colors.Muted)
-	Good  = lipgloss.NewStyle().Foreground(Colors.Good).Bold(true)
-	Bad   = lipgloss.NewStyle().Foreground(Colors.Bad).Bold(true)
-	Warn  = lipgloss.NewStyle().Foreground(Colors.Warn).Bold(true)
-	Acc   = lipgloss.NewStyle().Foreground(Colors.Accent).Bold(true)
+	Title        lipgloss.Style
+	Sub          lipgloss.Style
+	Dim          lipgloss.Style
+	Muted        lipgloss.Style
+	Good         lipgloss.Style
+	Bad          lipgloss.Style
+	Warn         lipgloss.Style
+	Acc          lipgloss.Style
+	Acc2         lipgloss.Style
+	Nav          lipgloss.Style
+	NavActive    lipgloss.Style
+	Card         lipgloss.Style
+	Popup        lipgloss.Style
+	FootStyle    lipgloss.Style
+	StatLabel    lipgloss.Style
+	StatValue    lipgloss.Style
+	SectionTitle lipgloss.Style
+	PetFrame     lipgloss.Style
+	BadgeOn      lipgloss.Style
+	BadgeOff     lipgloss.Style
+)
 
-	Nav = lipgloss.NewStyle().
-		Foreground(Colors.Dim).
-		Padding(0, 1)
+func init() { ApplyTheme("purple") }
 
+// ApplyTheme swaps the active palette and rebuilds all styles.
+func ApplyTheme(name string) {
+	p, ok := Themes[name]
+	if !ok {
+		p = Themes["purple"]
+	}
+	Colors = p
+
+	Title = lipgloss.NewStyle().Foreground(p.Fg).Bold(true)
+	Sub = lipgloss.NewStyle().Foreground(p.Dim).Italic(true)
+	Dim = lipgloss.NewStyle().Foreground(p.Dim)
+	Muted = lipgloss.NewStyle().Foreground(p.Muted)
+	Good = lipgloss.NewStyle().Foreground(p.Good).Bold(true)
+	Bad = lipgloss.NewStyle().Foreground(p.Bad).Bold(true)
+	Warn = lipgloss.NewStyle().Foreground(p.Warn).Bold(true)
+	Acc = lipgloss.NewStyle().Foreground(p.Accent).Bold(true)
+	Acc2 = lipgloss.NewStyle().Foreground(p.Accent2)
+
+	Nav = lipgloss.NewStyle().Foreground(p.Dim).Padding(0, 2)
 	NavActive = lipgloss.NewStyle().
-			Foreground(Colors.Fg).
-			Background(Colors.Accent).
-			Bold(true).
-			Padding(0, 1)
+		Foreground(p.Fg).
+		Background(p.Accent).
+		Bold(true).
+		Padding(0, 2)
 
 	Card = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(Colors.Border).
+		BorderForeground(p.Border).
 		Padding(0, 1)
 
-	FootStyle = lipgloss.NewStyle().Foreground(Colors.Muted)
+	Popup = lipgloss.NewStyle().
+		Border(lipgloss.ThickBorder()).
+		BorderForeground(p.Accent).
+		Padding(1, 2)
 
-	StatLabel = lipgloss.NewStyle().Foreground(Colors.Dim)
-	StatValue = lipgloss.NewStyle().Foreground(Colors.Fg).Bold(true)
-
-	SectionTitle = lipgloss.NewStyle().
-			Foreground(Colors.Accent).
-			Bold(true).
-			MarginBottom(0)
-)
+	FootStyle = lipgloss.NewStyle().Foreground(p.Muted)
+	StatLabel = lipgloss.NewStyle().Foreground(p.Dim)
+	StatValue = lipgloss.NewStyle().Foreground(p.Fg).Bold(true)
+	SectionTitle = lipgloss.NewStyle().Foreground(p.Accent).Bold(true)
+	PetFrame = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(p.Accent2).
+		Padding(1, 3)
+	BadgeOn = lipgloss.NewStyle().Foreground(p.Good).Bold(true)
+	BadgeOff = lipgloss.NewStyle().Foreground(p.Muted)
+}
 
 // HRule returns a horizontal separator of the given width.
 func HRule(w int) string {
@@ -78,7 +143,6 @@ func Frame(w, h int, header, body, footer string) string {
 	}
 	headerH := lipgloss.Height(header)
 	footerH := lipgloss.Height(footer)
-	// header + body + hrule(1) + footer = h  →  body = h - header - footer - 1
 	bodyH := h - headerH - footerH - 1
 	if bodyH < 3 {
 		bodyH = 3
@@ -127,6 +191,12 @@ func Bar(value, max, width int) string {
 	full := lipgloss.NewStyle().Foreground(Colors.Accent).Render(repeat("█", filled))
 	empty := lipgloss.NewStyle().Foreground(Colors.Muted).Render(repeat("·", width-filled))
 	return full + empty
+}
+
+// Overlay centers inner over a full-screen placeholder of size w×h.
+// The placeholder is blank; only inner is painted.
+func Overlay(w, h int, inner string) string {
+	return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, inner)
 }
 
 func repeat(s string, n int) string {

@@ -17,6 +17,16 @@ you up when the pattern turns sour. No cloud. No Ollama. No API. No server.
 
 ## Features
 
+- three tabs: **landing · diary · chat**. Export, settings, models, and help
+  are overlays you can summon from anywhere
+- landing page with an ASCII pet that speaks tone-aware lines, a today stats
+  sidebar, and a mini this-week recap
+- configurable pet (character, hat, eyes, shiny heart, name) and five colour
+  themes (purple / green / amber / cyan / rose) — everything persists to
+  `settings.json`
+- in-app model downloader: pick from a curated list of small GGUFs
+  (SmolLM2 135M / 360M, Qwen2.5 0.5B / 1.5B, TinyLlama 1.1B, Gemma 3 1B),
+  see live progress, and activate with one keystroke
 - auto-created today entry with `monday, 20 april 2026 / started at 07:14 / today:`
 - editable body via `bubbletea` + `bubbles/textarea`
 - structured metrics (mood, study, scroll, project, tags, project name/note/done)
@@ -27,10 +37,9 @@ you up when the pattern turns sour. No cloud. No Ollama. No API. No server.
   plus a free chat fallback
 - the app works with no model at all; the stub engine produces short,
   deterministic summaries built from your own numbers
-- Markdown + HTML export of one entry, this week, or everything — raw or
-  cleaned
-- weekly / monthly / yearly **wrapped** view with stat cards, bars, top tags,
-  top themes, project roll-ups, and a blunt one-line takeaway
+- Markdown + HTML export of one entry, this week, or everything
+- weekly recap embedded on the landing page; scrollable list in the diary tab
+- runs on Linux, macOS, and Windows — pure-Go SQLite, no CGO
 
 ## Stack
 
@@ -42,18 +51,25 @@ you up when the pattern turns sour. No cloud. No Ollama. No API. No server.
 ## Local model
 
 The app ships with an offline fallback engine so it runs with or without a
-model. To use real local inference, drop a GGUF file somewhere and point at
-it:
+model. The easiest way to get a real model is the in-app downloader:
 
-```sh
-bit-tracker --model ~/.local/share/bit-tracker/models/your-model.gguf
-# or
-export BIT_TRACKER_MODEL=~/.local/share/bit-tracker/models/your-model.gguf
-bit-tracker
+```
+press d anywhere in the app  →  arrow keys to pick a model  →  Enter to download
+                                a to activate  →  chat will pick it up
 ```
 
-The default search path is `~/.local/share/bit-tracker/models/model.gguf`.
-The model is loaded once and reused for the life of the process.
+Files are saved under the `--models` directory (per-user cache dir by default)
+and the choice is persisted to `settings.json`, so the next launch reloads
+the same model automatically.
+
+You can also point at any GGUF manually:
+
+```sh
+bit-tracker --model /path/to/your-model.gguf
+# or
+export BIT_TRACKER_MODEL=/path/to/your-model.gguf
+bit-tracker
+```
 
 A direct llama.cpp binding is scaffolded behind the `llamacpp` build tag —
 see `internal/ai/llamacpp.go`. The rest of the app never sees the binding's
@@ -86,30 +102,30 @@ go build -o bit-tracker ./cmd/bit-tracker
 ## Run
 
 ```sh
-./bit-tracker [--data DIR] [--exports DIR] [--model PATH]
+./bit-tracker [--data DIR] [--exports DIR] [--models DIR] [--model PATH]
 ```
 
-Defaults:
+Defaults (all cross-platform via `os.UserConfigDir` / `os.UserCacheDir`):
 
-- `--data`    → `$XDG_CONFIG_HOME/bit-tracker` (or `~/.config/bit-tracker`)
+- `--data`    → `%AppData%\bit-tracker` (Windows), `~/Library/Application Support/bit-tracker` (macOS), `$XDG_CONFIG_HOME/bit-tracker` or `~/.config/bit-tracker` (Linux)
 - `--exports` → `~/bit-tracker-exports`
-- `--model`   → `$BIT_TRACKER_MODEL` if set, else `~/.local/share/bit-tracker/models/model.gguf`
+- `--models`  → per-user cache dir (where GGUFs downloaded in-app are kept)
+- `--model`   → explicit override; otherwise the last model activated in the UI is reloaded
 
 ## Shortcuts
 
-| Where     | Keys                                                                |
-|-----------|---------------------------------------------------------------------|
-| Global    | `t` today · `h` history · `c` chat · `e` export · `w` wrapped       |
-|           | `Tab` / `Shift+Tab` cycle views · `q` / `Ctrl+C` quit               |
-| Today     | `Enter` / `i` start editing · `Esc` save & leave · `Ctrl+S` save    |
-|           | `r` rewrite via AI · `+` / `-` mood · `s` +15 study · `p` +15 proj  |
-|           | `o` +15 scroll · `x` toggle project-done                            |
-| History   | `↑/↓` move · `Enter` open · `/` search · `#tag` tag filter          |
-|           | in entry view: `m` export Markdown · `H` export HTML · `Esc` back   |
-| Chat      | `i` type prompt · `Enter` send · `Esc` unfocus · `Ctrl+L` clear     |
-|           | `r` rewrite today · `f` reflect (14 days) · `u` wake up (7 days)    |
-| Export    | `↑/↓` move · `Enter` run · output path shown at the bottom          |
-| Wrapped   | `w` week · `m` month · `y` year                                     |
+| Where       | Keys                                                                 |
+|-------------|----------------------------------------------------------------------|
+| Global      | `1` landing · `2` diary · `3` chat · `Tab` / `Shift+Tab` cycle tabs  |
+|             | `s` settings · `e` export · `d` models · `?` help · `q` quit         |
+| Landing     | `Enter` jump to diary                                                |
+| Diary today | `Enter` / `i` edit · `v` switch to history · `Esc` save & leave      |
+|             | `r` rewrite via AI · `+` / `-` mood · `y` +15 study · `p` +15 project · `o` +15 scroll · `x` toggle done |
+| Diary list  | `↑/↓` move · `Enter` open · `/` search · `#tag` tag filter · `Esc` back |
+| Entry       | `m` export Markdown · `H` export HTML · `Esc` back                   |
+| Chat        | `i` type · `Enter` send · `r` rewrite · `f` reflect · `u` wake up · `Ctrl+L` clear |
+| Settings    | `↑/↓` field · `←/→` change · `Esc` close                             |
+| Models      | `↑/↓` select · `Enter` download · `a` activate · `x` cancel · `Esc` close |
 
 ## Export
 
