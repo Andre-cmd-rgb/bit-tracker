@@ -14,16 +14,19 @@ import (
 type Settings struct {
 	// Pet
 	PetName      string `json:"pet_name"`
-	PetCharacter string `json:"pet_character"` // penguin | robot | cat | bunny | ghost
-	PetHat       string `json:"pet_hat"`       // none | crown | tophat | propeller | halo | wizard | beanie | tinyduck
-	PetEyes      string `json:"pet_eyes"`      // dot | star | cross | circle | at | degree
+	PetCharacter string `json:"pet_character"` // penguin | robot | cat | bunny | ghost | fox | dragon | owl
+	PetHat       string `json:"pet_hat"`       // none | crown | tophat | propeller | halo | wizard | beanie | tinyduck | flower | antenna
+	PetEyes      string `json:"pet_eyes"`      // dot | star | cross | circle | at | degree | minus | cute | sleepy | wink
 	PetShiny     bool   `json:"pet_shiny"`
 
 	// Theme
 	ThemeName string `json:"theme_name"` // purple | green | amber | cyan | rose
 
 	// AI
-	ActiveModel string `json:"active_model"` // filename of chosen gguf, relative to ModelsDir
+	ActiveModel string `json:"active_model"` // id of chosen gguf (resolves to catalog filename)
+
+	// Onboarding
+	SetupComplete bool `json:"setup_complete"`
 }
 
 // Default returns sane defaults when no settings file exists.
@@ -40,9 +43,10 @@ func Default() Settings {
 }
 
 type Store struct {
-	mu   sync.Mutex
-	path string
-	cur  Settings
+	mu    sync.Mutex
+	path  string
+	cur   Settings
+	fresh bool // true when settings.json did not exist at Open time
 }
 
 // Open loads settings.json from dir, writing defaults if missing.
@@ -55,6 +59,7 @@ func Open(dir string) (*Store, error) {
 	data, err := os.ReadFile(p)
 	if err != nil {
 		if os.IsNotExist(err) {
+			s.fresh = true
 			if err := s.save(); err != nil {
 				return nil, err
 			}
@@ -85,8 +90,17 @@ func Open(dir string) (*Store, error) {
 		merged.ThemeName = parsed.ThemeName
 	}
 	merged.ActiveModel = parsed.ActiveModel
+	merged.SetupComplete = parsed.SetupComplete
 	s.cur = merged
 	return s, nil
+}
+
+// IsFresh reports whether the store was created this launch (no prior
+// settings.json on disk). Used to decide whether to show the setup flow.
+func (s *Store) IsFresh() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.fresh
 }
 
 // Get returns a copy of current settings.

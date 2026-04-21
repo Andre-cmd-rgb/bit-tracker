@@ -47,7 +47,12 @@ const (
 	OverlayModels
 	OverlayEntry
 	OverlayHelp
+	OverlaySetup
 )
+
+// shineTickInterval controls how often the shiny pet heart re-paints. Kept
+// slow enough to be a gentle shimmer, not a strobe.
+const shineTickInterval = 450 * time.Millisecond
 
 // diarySub is the sub-mode within the diary tab.
 type diarySub int
@@ -112,6 +117,13 @@ type Model struct {
 	modelsIdx    int
 	modelProg    map[string]download.Progress
 	modelCancels map[string]context.CancelFunc
+
+	// setup flow
+	setupStep       int
+	setupInProgress bool
+
+	// shine animation
+	shineStep int
 }
 
 type chatMessage struct {
@@ -148,18 +160,27 @@ func NewModel(cfg Config, repo *diary.Repo, engine ai.Engine, store *settings.St
 	// Apply saved theme immediately so first paint uses the right palette.
 	ui.ApplyTheme(store.Get().ThemeName)
 
+	overlay := OverlayNone
+	setupInProgress := false
+	if store.IsFresh() || !store.Get().SetupComplete {
+		overlay = OverlaySetup
+		setupInProgress = true
+	}
+
 	return &Model{
-		cfg:          cfg,
-		repo:         repo,
-		engine:       engine,
-		settings:     store,
-		view:         ViewLanding,
-		editor:       ta,
-		search:       si,
-		chatInput:    ci,
-		chatMode:     "chat",
-		modelProg:    map[string]download.Progress{},
-		modelCancels: map[string]context.CancelFunc{},
+		cfg:             cfg,
+		repo:            repo,
+		engine:          engine,
+		settings:        store,
+		view:            ViewLanding,
+		overlay:         overlay,
+		setupInProgress: setupInProgress,
+		editor:          ta,
+		search:          si,
+		chatInput:       ci,
+		chatMode:        "chat",
+		modelProg:       map[string]download.Progress{},
+		modelCancels:    map[string]context.CancelFunc{},
 	}
 }
 
@@ -168,8 +189,15 @@ func (m *Model) Init() tea.Cmd {
 		m.loadToday(time.Now()),
 		m.loadHistory(),
 		m.loadEngine(),
+		m.tickShine(),
 	)
 }
+
+func (m *Model) tickShine() tea.Cmd {
+	return tea.Tick(shineTickInterval, func(time.Time) tea.Msg { return shineTickMsg{} })
+}
+
+type shineTickMsg struct{}
 
 // ---- messages ----
 
@@ -368,6 +396,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = ""
 		}
 		return m, nil
+
+	case shineTickMsg:
+		m.shineStep++
+		return m, m.tickShine()
 
 	case errMsg:
 		return m, m.setStatus("error: " + msg.err.Error())

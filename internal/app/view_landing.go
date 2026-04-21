@@ -27,15 +27,13 @@ func (m *Model) viewLanding() string {
 	cfg := m.settings.Get()
 	tone := diary.CurrentTone(m.history)
 
-	// Pet block.
-	lines := pet.Render(cfg.PetCharacter, cfg.PetHat, cfg.PetEyes, cfg.PetShiny)
-	sprite := strings.Join(lines, "\n")
-	spriteBox := ui.PetFrame.Render(sprite)
+	// Pet block with optional shine + sparkle.
+	spriteBox := m.renderPetBox(cfg, true)
 
 	// Quote keyed by the day.
 	seed := time.Now().YearDay()*31 + int(tone)
 	quote := pet.QuoteFor(cfg.PetName, tone, int64(seed))
-	speech := ui.Acc2.Render(cfg.PetName + " says") + "\n" + ui.Acc.Italic(true).Render("\"" + quote + "\"")
+	speech := ui.Acc2.Render(cfg.PetName+" says") + "\n" + ui.Acc.Italic(true).Render("\""+quote+"\"")
 	petPane := lipgloss.JoinVertical(lipgloss.Center, spriteBox, "", speech)
 
 	// Welcome.

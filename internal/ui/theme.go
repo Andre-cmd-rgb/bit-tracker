@@ -2,7 +2,11 @@
 // across views. Colors can be switched via ApplyTheme.
 package ui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 type Palette struct {
 	Fg      lipgloss.Color
@@ -197,6 +201,54 @@ func Bar(value, max, width int) string {
 // The placeholder is blank; only inner is painted.
 func Overlay(w, h int, inner string) string {
 	return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, inner)
+}
+
+// ShinePalette is the cycling rainbow used to paint the shiny heart glyph.
+// The hues are picked to pop against any of the five themes.
+var ShinePalette = []lipgloss.Color{
+	"#F472B6", // pink
+	"#F59E0B", // amber
+	"#FACC15", // yellow
+	"#4ADE80", // green
+	"#22D3EE", // cyan
+	"#818CF8", // indigo
+	"#C084FC", // violet
+}
+
+// Shine picks a palette entry for step and returns a bold style painted in it.
+func Shine(step int) lipgloss.Style {
+	if len(ShinePalette) == 0 {
+		return lipgloss.NewStyle().Foreground(Colors.Accent).Bold(true)
+	}
+	idx := step % len(ShinePalette)
+	if idx < 0 {
+		idx += len(ShinePalette)
+	}
+	return lipgloss.NewStyle().Foreground(ShinePalette[idx]).Bold(true)
+}
+
+// ApplyShine highlights every occurrence of glyph in lines using the current
+// shine step. Each occurrence in a single line gets the same colour; the
+// colour shifts between ticks to create a gentle shimmer.
+func ApplyShine(lines []string, glyph string, step int) []string {
+	if glyph == "" {
+		return lines
+	}
+	style := Shine(step)
+	painted := style.Render(glyph)
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		out[i] = strings.ReplaceAll(line, glyph, painted)
+	}
+	return out
+}
+
+// Sparkle draws a tiny constellation keyed to step — used to garnish shiny
+// pets with a bit of movement around the sprite.
+func Sparkle(step int) string {
+	frames := []string{"· . ✦ . ·", ". ✦ · ✦ .", "✦ · . · ✦", ". · ✦ · ."}
+	f := frames[step%len(frames)]
+	return Shine(step + 2).Render(f)
 }
 
 func repeat(s string, n int) string {

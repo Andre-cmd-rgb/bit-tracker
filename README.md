@@ -19,14 +19,19 @@ you up when the pattern turns sour. No cloud. No Ollama. No API. No server.
 
 - three tabs: **landing · diary · chat**. Export, settings, models, and help
   are overlays you can summon from anywhere
+- guided **first-run setup** — welcome, pet, palette, and model in four pages;
+  runs exactly once, persists to `settings.json`
 - landing page with an ASCII pet that speaks tone-aware lines, a today stats
   sidebar, and a mini this-week recap
-- configurable pet (character, hat, eyes, shiny heart, name) and five colour
-  themes (purple / green / amber / cyan / rose) — everything persists to
-  `settings.json`
+- configurable pet — eight characters (penguin · robot · cat · bunny · ghost ·
+  fox · dragon · owl), ten hats, ten eye expressions, shimmery **shiny mode**
+  that cycle-paints the heart glyph through a rainbow, and a pet name
+- five colour themes (purple · green · amber · cyan · rose) — everything
+  persists to `settings.json`
 - in-app model downloader: pick from a curated list of small GGUFs
   (SmolLM2 135M / 360M, Qwen2.5 0.5B / 1.5B, TinyLlama 1.1B, Gemma 3 1B),
-  see live progress, and activate with one keystroke
+  see live progress, and activate with one keystroke — the model is also
+  selectable inline from the settings overlay
 - auto-created today entry with `monday, 20 april 2026 / started at 07:14 / today:`
 - editable body via `bubbletea` + `bubbles/textarea`
 - structured metrics (mood, study, scroll, project, tags, project name/note/done)
@@ -124,8 +129,9 @@ Defaults (all cross-platform via `os.UserConfigDir` / `os.UserCacheDir`):
 | Diary list  | `↑/↓` move · `Enter` open · `/` search · `#tag` tag filter · `Esc` back |
 | Entry       | `m` export Markdown · `H` export HTML · `Esc` back                   |
 | Chat        | `i` type · `Enter` send · `r` rewrite · `f` reflect · `u` wake up · `Ctrl+L` clear |
-| Settings    | `↑/↓` field · `←/→` change · `Esc` close                             |
+| Settings    | `↑/↓` field · `←/→` change · `Enter` next · `Esc` close               |
 | Models      | `↑/↓` select · `Enter` download · `a` activate · `x` cancel · `Esc` close |
+| Setup       | `Enter` next · `Backspace` back · `Esc` skip · per-page letters cycle |
 
 ## Export
 
