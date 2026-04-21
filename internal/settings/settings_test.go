@@ -47,6 +47,46 @@ func TestUpdatePersists(t *testing.T) {
 	}
 }
 
+func TestIsFreshOnFirstOpen(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.IsFresh() {
+		t.Fatal("first open should report fresh=true")
+	}
+	// Re-opening should no longer be fresh.
+	s2, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s2.IsFresh() {
+		t.Fatal("second open should not be fresh")
+	}
+}
+
+func TestSetupCompletePersists(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Get().SetupComplete {
+		t.Fatal("default should have SetupComplete=false")
+	}
+	if err := s.Update(func(s *Settings) { s.SetupComplete = true }); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s2.Get().SetupComplete {
+		t.Fatal("SetupComplete did not persist")
+	}
+}
+
 func TestMergesPartialConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")

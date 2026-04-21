@@ -23,7 +23,18 @@ import (
 // Overlay dispatch ----------------------------------------------------------
 
 func (m *Model) handleOverlayKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Setup owns all keys (including esc/q) until it explicitly exits.
+	if m.overlay == OverlaySetup {
+		return m.handleSetupKey(msg)
+	}
 	if msg.String() == "esc" || msg.String() == "q" {
+		// If the user detoured into the models/help overlay during setup,
+		// esc should return them to the setup flow, not dump them on an
+		// empty landing screen mid-onboarding.
+		if m.setupInProgress {
+			m.overlay = OverlaySetup
+			return m, nil
+		}
 		m.overlay = OverlayNone
 		return m, nil
 	}
@@ -50,6 +61,8 @@ func (m *Model) renderOverlay() string {
 		return m.renderModels()
 	case OverlayHelp:
 		return m.renderHelp()
+	case OverlaySetup:
+		return m.renderSetup()
 	}
 	return ""
 }
@@ -72,9 +85,43 @@ func cycleStr(cur string, list []string, dir int) string {
 	return list[0]
 }
 
+// modelOptions lists selectable model ids plus a "none" sentinel meaning
+// "use the grounded stub".
+func modelOptions() []string {
+	opts := []string{""}
+	for _, spec := range ai.Catalog() {
+		opts = append(opts, spec.ID)
+	}
+	return opts
+}
+
+func modelLabel(id string) string {
+	if id == "" {
+		return "none (stub)"
+	}
+	if spec, ok := ai.FindModel(id); ok {
+		return spec.Name
+	}
+	return id
+}
+
+// activeModelID returns the id that maps to the persisted filename, or "" if
+// nothing is active or the filename is unknown.
+func activeModelID(filename string) string {
+	if filename == "" {
+		return ""
+	}
+	for _, spec := range ai.Catalog() {
+		if spec.Filename == filename {
+			return spec.ID
+		}
+	}
+	return ""
+}
+
 func settingsFields() []settingsField {
 	themeNames := []string{"purple", "green", "amber", "cyan", "rose"}
-	petNames := []string{"bit", "pip", "doodle", "tofu", "momo", "scoot"}
+	petNames := []string{"bit", "pip", "doodle", "tofu", "momo", "scoot", "echo", "juno"}
 	return []settingsField{
 		{
 			label: "pet name",
@@ -97,7 +144,7 @@ func settingsFields() []settingsField {
 			cycle: func(s *settings.Settings, d int) { s.PetEyes = cycleStr(s.PetEyes, pet.EyeOrder(), d) },
 		},
 		{
-			label: "shiny heart",
+			label: "shiny pet",
 			read:  func(s settings.Settings) string { return yesNo(s.PetShiny) },
 			cycle: func(s *settings.Settings, d int) { s.PetShiny = !s.PetShiny },
 		},
@@ -107,6 +154,21 @@ func settingsFields() []settingsField {
 			cycle: func(s *settings.Settings, d int) {
 				s.ThemeName = cycleStr(s.ThemeName, themeNames, d)
 				ui.ApplyTheme(s.ThemeName)
+			},
+		},
+		{
+			label: "model",
+			read:  func(s settings.Settings) string { return modelLabel(activeModelID(s.ActiveModel)) },
+			cycle: func(s *settings.Settings, d int) {
+				cur := activeModelID(s.ActiveModel)
+				next := cycleStr(cur, modelOptions(), d)
+				if next == "" {
+					s.ActiveModel = ""
+					return
+				}
+				if spec, ok := ai.FindModel(next); ok {
+					s.ActiveModel = spec.Filename
+				}
 			},
 		},
 	}
@@ -121,29 +183,56 @@ func yesNo(b bool) string {
 
 func (m *Model) handleSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	fields := settingsFields()
+	before := m.settings.Get().ActiveModel
+	dir := 0
 	switch msg.String() {
 	case "up", "k":
 		if m.settingsIdx > 0 {
 			m.settingsIdx--
 		}
+		return m, nil
 	case "down", "j":
 		if m.settingsIdx < len(fields)-1 {
 			m.settingsIdx++
 		}
+		return m, nil
 	case "left", "h":
-		_ = m.settings.Update(func(s *settings.Settings) { fields[m.settingsIdx].cycle(s, -1) })
+		dir = -1
 	case "right", "l", "enter":
-		_ = m.settings.Update(func(s *settings.Settings) { fields[m.settingsIdx].cycle(s, +1) })
+		dir = +1
+	default:
+		return m, nil
+	}
+	_ = m.settings.Update(func(s *settings.Settings) { fields[m.settingsIdx].cycle(s, dir) })
+	after := m.settings.Get().ActiveModel
+	if after != before {
+		return m, m.applyActiveModel()
 	}
 	return m, nil
+}
+
+// applyActiveModel resolves the current ActiveModel filename against the
+// models directory and re-loads the engine. If no model is selected, the
+// engine falls back to the grounded stub.
+func (m *Model) applyActiveModel() tea.Cmd {
+	filename := m.settings.Get().ActiveModel
+	if filename == "" {
+		m.cfg.ModelPath = ""
+		return tea.Batch(m.setStatus("model: none (stub)"), m.loadEngine())
+	}
+	dest := filepath.Join(m.cfg.ModelDir, filename)
+	if !fileExists(dest) {
+		return m.setStatus("selected model not on disk — open 'd' to download")
+	}
+	m.cfg.ModelPath = dest
+	return tea.Batch(m.setStatus("model activated"), m.loadEngine())
 }
 
 func (m *Model) renderSettings() string {
 	fields := settingsFields()
 	cur := m.settings.Get()
 
-	preview := strings.Join(pet.Render(cur.PetCharacter, cur.PetHat, cur.PetEyes, cur.PetShiny), "\n")
-	petBox := ui.PetFrame.Render(preview)
+	petBox := m.renderPetBox(cur, true)
 
 	var rows []string
 	for i, f := range fields {
@@ -157,9 +246,17 @@ func (m *Model) renderSettings() string {
 		rows = append(rows, cursor+label+val)
 	}
 
+	footer := ui.Dim.Render("saved to " + m.settings.Path())
+	if cur.ActiveModel != "" {
+		dest := filepath.Join(m.cfg.ModelDir, cur.ActiveModel)
+		if !fileExists(dest) {
+			footer = ui.Warn.Render("model file missing — press 'd' to download") + "\n" + footer
+		}
+	}
+
 	body := lipgloss.JoinVertical(lipgloss.Left,
 		ui.Title.Render("settings"),
-		ui.Dim.Render("↑/↓ move  ·  ←/→ change  ·  esc close"),
+		ui.Dim.Render("↑/↓ move  ·  ←/→ change  ·  enter next  ·  esc close"),
 		"",
 		lipgloss.JoinHorizontal(lipgloss.Top,
 			petBox,
@@ -167,9 +264,23 @@ func (m *Model) renderSettings() string {
 			strings.Join(rows, "\n"),
 		),
 		"",
-		ui.Dim.Render("saved to "+m.settings.Path()),
+		footer,
 	)
 	return ui.Popup.Render(body)
+}
+
+// renderPetBox draws the sprite with optional shine/sparkle, wrapped in the
+// theme-coloured frame used on the landing page.
+func (m *Model) renderPetBox(cur settings.Settings, withSparkle bool) string {
+	lines := pet.Render(cur.PetCharacter, cur.PetHat, cur.PetEyes, cur.PetShiny)
+	if cur.PetShiny {
+		lines = ui.ApplyShine(lines, pet.ShinyGlyph, m.shineStep)
+	}
+	sprite := strings.Join(lines, "\n")
+	if withSparkle && cur.PetShiny {
+		sprite = ui.Sparkle(m.shineStep) + "\n" + sprite + "\n" + ui.Sparkle(m.shineStep+1)
+	}
+	return ui.PetFrame.Render(sprite)
 }
 
 // Export --------------------------------------------------------------------
@@ -366,27 +477,75 @@ func (m *Model) renderModels() string {
 // Help ---------------------------------------------------------------------
 
 func (m *Model) renderHelp() string {
-	rows := [][2]string{
-		{"1/2/3", "switch tabs (landing · diary · chat)"},
-		{"tab / shift+tab", "cycle tabs"},
-		{"s", "settings (pet, theme)"},
-		{"e", "export (markdown / html)"},
-		{"d", "download & activate a model"},
-		{"enter", "edit / open / confirm"},
-		{"/ on diary", "search entries or #tag"},
-		{"r / f / u on chat", "rewrite · reflect · wake up"},
-		{"ctrl+s", "save today"},
-		{"q", "quit"},
+	sections := []struct {
+		title string
+		rows  [][2]string
+	}{
+		{"navigation", [][2]string{
+			{"1 / 2 / 3", "landing · diary · chat"},
+			{"tab / shift+tab", "cycle tabs"},
+			{"q", "quit"},
+		}},
+		{"overlays", [][2]string{
+			{"s", "settings (pet, theme, model)"},
+			{"e", "export (markdown / html)"},
+			{"d", "download & activate a model"},
+			{"?", "this help screen"},
+			{"esc", "close any overlay"},
+		}},
+		{"diary — today", [][2]string{
+			{"enter / i", "edit entry body"},
+			{"esc", "save & leave editor"},
+			{"ctrl+s", "save without leaving"},
+			{"+ / -", "mood up / down"},
+			{"y / Y", "study ± 15m"},
+			{"p / P", "project ± 15m"},
+			{"o / O", "scroll ± 15m"},
+			{"x", "toggle project done"},
+			{"r", "rewrite entry via AI"},
+			{"v", "switch to history"},
+		}},
+		{"diary — history", [][2]string{
+			{"↑ / ↓", "move selection"},
+			{"enter", "open entry detail"},
+			{"/", "search entries or #tag"},
+			{"m / H", "export detail (md / html)"},
+			{"esc", "back to today"},
+		}},
+		{"chat", [][2]string{
+			{"i", "type a prompt"},
+			{"r / f / u", "rewrite · reflect · wake up"},
+			{"enter", "send (while typing)"},
+			{"ctrl+l", "clear transcript"},
+		}},
 	}
-	var lines []string
-	for _, r := range rows {
-		lines = append(lines, ui.Acc.Render(fmt.Sprintf("%-18s", r[0]))+ui.StatValue.Render(r[1]))
+
+	var cols []string
+	for _, s := range sections {
+		var lines []string
+		lines = append(lines, ui.SectionTitle.Render(s.title))
+		for _, r := range s.rows {
+			lines = append(lines, ui.Acc.Render(fmt.Sprintf("%-16s", r[0]))+ui.StatValue.Render(r[1]))
+		}
+		cols = append(cols, strings.Join(lines, "\n"))
 	}
+
+	// Two-column layout for denser help on wide screens.
+	var layout string
+	if m.width >= 100 {
+		left := lipgloss.JoinVertical(lipgloss.Left, cols[0], "", cols[1], "", cols[2])
+		right := lipgloss.JoinVertical(lipgloss.Left, cols[3], "", cols[4])
+		layout = lipgloss.JoinHorizontal(lipgloss.Top,
+			lipgloss.NewStyle().MarginRight(4).Render(left), right)
+	} else {
+		layout = strings.Join(cols, "\n\n")
+	}
+
 	body := lipgloss.JoinVertical(lipgloss.Left,
 		ui.Title.Render("keys"),
 		ui.Dim.Render("esc close"),
 		"",
-		strings.Join(lines, "\n"),
+		layout,
 	)
 	return ui.Popup.Render(body)
 }
