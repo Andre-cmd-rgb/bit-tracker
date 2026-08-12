@@ -2,17 +2,35 @@
 // is a deterministic offline fallback; a real llama.cpp-backed engine is
 // compiled in with the `llamacpp` build tag.
 //
+// Every engine has read-only access to the full diary history through a
+// DataSource, so even the grounded stub can answer questions with real
+// numbers instead of guessing.
+//
 // No network calls. No external server. No Ollama.
 package ai
 
 import (
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/andre-cmd-rgb/bit-tracker/internal/diary"
 )
 
-var ErrUnavailable = errors.New("local model unavailable")
+var (
+	ErrUnavailable = errors.New("local model unavailable")
+	ErrNoData      = errors.New("no data source attached")
+)
+
+// DataSource is the read-only window onto the diary the AI uses to ground
+// every answer. The diary package supplies an adapter (diary.NewAISource).
+type DataSource interface {
+	All() ([]diary.Entry, error)
+	Recent(n int) ([]diary.Entry, error)
+	Range(from, to time.Time) ([]diary.Entry, error)
+	ByDate(t time.Time) (diary.Entry, error)
+	Search(keyword, tag string) ([]diary.Entry, error)
+}
 
 // Engine is the clean abstraction every UI path talks to.
 type Engine interface {
@@ -23,6 +41,7 @@ type Engine interface {
 	ReflectRecent(entries []diary.Entry, tone diary.Tone) (string, error)
 	WakeUp(entries []diary.Entry) (string, error)
 	ModelPath() string
+	SetDataSource(ds DataSource)
 	Shutdown()
 }
 

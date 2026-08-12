@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -45,16 +46,35 @@ func main() {
 		fail("settings error:", err)
 	}
 
-	// Resolve active model: explicit --model wins, else settings.ActiveModel.
+	// Resolve active model with a priority chain:
+	//  1. --model flag
+	//  2. BIT_TRACKER_MODEL env
+	//  3. settings.ActiveModel (last chosen in UI)
+	//  4. auto-detect a single *.gguf file in --models
 	if modelPath == "" {
 		if p := os.Getenv("BIT_TRACKER_MODEL"); p != "" {
 			modelPath = p
 		} else if am := cfgStore.Get().ActiveModel; am != "" {
-			modelPath = filepath.Join(modelDir, am)
+			candidate := filepath.Join(modelDir, am)
+			if _, err := os.Stat(candidate); err == nil {
+				modelPath = candidate
+			}
+		}
+	}
+	if modelPath == "" {
+		if found := autoDetectModel(modelDir); found != "" {
+			modelPath = found
+			// Persist the auto-detected pick so subsequent launches reload it
+			// without re-scanning and the settings overlay shows it as active.
+			_ = cfgStore.Update(func(s *settings.Settings) {
+				s.ActiveModel = filepath.Base(found)
+			})
 		}
 	}
 
 	engine := ai.New()
+	repo := diary.NewRepo(store)
+	engine.SetDataSource(diary.NewAISource(repo))
 	_ = engine.LoadModel(modelPath)
 	defer engine.Shutdown()
 
@@ -64,7 +84,6 @@ func main() {
 		ModelDir:  modelDir,
 		ModelPath: modelPath,
 	}
-	repo := diary.NewRepo(store)
 	m := app.NewModel(cfg, repo, engine, cfgStore)
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
@@ -76,6 +95,37 @@ func main() {
 func fail(msg string, err error) {
 	fmt.Fprintln(os.Stderr, msg, err)
 	os.Exit(1)
+}
+
+// autoDetectModel scans the models directory for a usable GGUF. A filename
+// that matches an entry in the curated catalog wins; otherwise the first
+// *.gguf is returned. Empty string means "none found".
+func autoDetectModel(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	catalog := ai.Catalog()
+	var fallback string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.EqualFold(filepath.Ext(name), ".gguf") {
+			continue
+		}
+		full := filepath.Join(dir, name)
+		for _, spec := range catalog {
+			if strings.EqualFold(name, spec.Filename) {
+				return full
+			}
+		}
+		if fallback == "" {
+			fallback = full
+		}
+	}
+	return fallback
 }
 
 // defaultDataDir uses the per-user config dir (Windows: %AppData%,
