@@ -1,8 +1,9 @@
 # bit-tracker
 
 A local, terminal-only diary. One plain text body per day, structured metrics
-on the side, and a grounded local-AI layer that can rewrite, reflect, or wake
-you up when the pattern turns sour. No cloud. No Ollama. No API. No server.
+on the side, and a grounded local-AI layer that can rewrite, reflect, wake
+you up when the pattern turns sour, or answer plain-text questions about
+your own history. No cloud. No Ollama. No API. No server.
 
 ## Philosophy
 
@@ -39,9 +40,14 @@ you up when the pattern turns sour. No cloud. No Ollama. No API. No server.
 - streak detection and tone escalation (normal → reflective → harsh → intervention)
 - history browser with keyword + `#tag` search
 - local AI abstraction with three modes — `rewrite`, `reflect`, `wake_up` —
-  plus a free chat fallback
+  plus a grounded chat that answers questions from your entries
+- the AI always has read-only access to your full diary history. ask
+  "today", "last week", "mood", "streak", "scroll", "#tag", or any keyword
+  and it replies with real numbers pulled from sqlite
 - the app works with no model at all; the stub engine produces short,
   deterministic summaries built from your own numbers
+- models auto-load on launch — if a GGUF sits in `--models`, the last-active
+  one is reopened; otherwise bit-tracker picks the first catalog match
 - Markdown + HTML export of one entry, this week, or everything
 - weekly recap embedded on the landing page; scrollable list in the diary tab
 - runs on Linux, macOS, and Windows — pure-Go SQLite, no CGO
@@ -85,8 +91,10 @@ go build -tags llamacpp -o bit-tracker ./cmd/bit-tracker
 ```
 
 When no binding is compiled or the model is missing, `rewrite` collapses the
-raw entry, `reflect` summarises your own recent metrics, and `wake_up` reads
-them back at you. Nothing in the app breaks if AI is unavailable.
+raw entry, `reflect` summarises your own recent metrics, `wake_up` reads
+them back at you, and free-form chat routes through a small intent parser
+that queries the diary directly (today / week / month / mood / streak /
+keyword / #tag). Nothing in the app breaks if AI is unavailable.
 
 ## Build
 
@@ -128,7 +136,7 @@ Defaults (all cross-platform via `os.UserConfigDir` / `os.UserCacheDir`):
 |             | `r` rewrite via AI · `+` / `-` mood · `y` +15 study · `p` +15 project · `o` +15 scroll · `x` toggle done |
 | Diary list  | `↑/↓` move · `Enter` open · `/` search · `#tag` tag filter · `Esc` back |
 | Entry       | `m` export Markdown · `H` export HTML · `Esc` back                   |
-| Chat        | `i` type · `Enter` send · `r` rewrite · `f` reflect · `u` wake up · `Ctrl+L` clear |
+| Chat        | `i` type · `Enter` send · `r` rewrite · `f` reflect · `u` wake up · `Ctrl+L` clear. Try prompts like `today`, `last week`, `mood`, `streak`, `#work` |
 | Settings    | `↑/↓` field · `←/→` change · `Enter` next · `Esc` close               |
 | Models      | `↑/↓` select · `Enter` download · `a` activate · `x` cancel · `Esc` close |
 | Setup       | `Enter` next · `Backspace` back · `Esc` skip · per-page letters cycle |
