@@ -66,3 +66,87 @@ func TestStubWakeUpMentionsNumbers(t *testing.T) {
 		t.Errorf("wake up missing numbers: %q", got)
 	}
 }
+
+// fakeSource is a tiny DataSource used to verify the stub's grounded answers.
+type fakeSource struct{ entries []diary.Entry }
+
+func (f *fakeSource) All() ([]diary.Entry, error) { return f.entries, nil }
+func (f *fakeSource) Recent(n int) ([]diary.Entry, error) {
+	if n <= 0 || len(f.entries) <= n {
+		return f.entries, nil
+	}
+	return f.entries[len(f.entries)-n:], nil
+}
+func (f *fakeSource) Range(_, _ time.Time) ([]diary.Entry, error) { return f.entries, nil }
+func (f *fakeSource) ByDate(t time.Time) (diary.Entry, error) {
+	for _, e := range f.entries {
+		if e.Date.Year() == t.Year() && e.Date.YearDay() == t.YearDay() {
+			return e, nil
+		}
+	}
+	return diary.Entry{}, diary.ErrNotFound
+}
+func (f *fakeSource) Search(keyword, tag string) ([]diary.Entry, error) {
+	var out []diary.Entry
+	for _, e := range f.entries {
+		if keyword != "" && !strings.Contains(strings.ToLower(e.RawText), strings.ToLower(keyword)) {
+			continue
+		}
+		if tag != "" {
+			hit := false
+			for _, tg := range e.Tags {
+				if strings.EqualFold(tg, tag) {
+					hit = true
+					break
+				}
+			}
+			if !hit {
+				continue
+			}
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+func TestStubGenerateRequiresDataSource(t *testing.T) {
+	e := New()
+	if _, err := e.Generate("anything", DefaultOptions()); err == nil {
+		t.Fatal("Generate without data source should error")
+	}
+}
+
+func TestStubGenerateAnswersFromData(t *testing.T) {
+	e := New()
+	today := time.Now()
+	entries := []diary.Entry{
+		{Date: today.AddDate(0, 0, -2), Mood: 4, StudyMinutes: 30, ScrollMinutes: 120, IsBadDay: true, RawText: "scrolled all evening"},
+		{Date: today.AddDate(0, 0, -1), Mood: 5, StudyMinutes: 60, ScrollMinutes: 90, RawText: "decent focus", Tags: []string{"focus"}},
+		{Date: today, Mood: 8, StudyMinutes: 120, ProjectMinutes: 60, IsGoodDay: true, RawText: "shipped the rewrite"},
+	}
+	e.SetDataSource(&fakeSource{entries: entries})
+
+	got, err := e.Generate("how was this week?", DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "entries") {
+		t.Errorf("week answer missing entries count: %q", got)
+	}
+
+	got, err = e.Generate("what's my mood?", DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "mood") {
+		t.Errorf("mood answer missing mood: %q", got)
+	}
+
+	got, err = e.Generate("today", DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "study") {
+		t.Errorf("today answer missing metrics: %q", got)
+	}
+}

@@ -56,6 +56,7 @@ func (m *Model) viewChat() string {
 	if m.engine != nil && m.engine.Available() {
 		modelBadge = ui.Good.Render("model on")
 	}
+	dataBadge := ui.Dim.Render(formatDataBadge(len(m.history)))
 	modes := []string{"rewrite", "reflect", "wake_up", "chat"}
 	modeLine := []string{}
 	for _, mode := range modes {
@@ -66,7 +67,7 @@ func (m *Model) viewChat() string {
 		modeLine = append(modeLine, style.Render(mode))
 	}
 	header := lipgloss.JoinVertical(lipgloss.Left,
-		ui.Title.Render("chat")+"   "+toneBadge+"   "+modelBadge,
+		ui.Title.Render("chat")+"   "+toneBadge+"   "+modelBadge+"   "+dataBadge,
 		strings.Join(modeLine, " "),
 	)
 
@@ -78,7 +79,8 @@ func (m *Model) viewChat() string {
 	var body strings.Builder
 	if len(m.chat) == 0 {
 		body.WriteString(ui.Muted.Render("no messages yet.\n"))
-		body.WriteString(ui.Muted.Render("r rewrite today · f reflect last 14 days · u wake up · i type a prompt"))
+		body.WriteString(ui.Muted.Render("r rewrite today · f reflect last 14 days · u wake up · i type a prompt\n"))
+		body.WriteString(ui.Muted.Render("try: \"today\", \"last week\", \"mood\", \"streak\", \"scroll\", or a #tag"))
 	}
 	for _, msg := range m.chat[start:] {
 		var role string
@@ -116,4 +118,15 @@ func indent(s, prefix string) string {
 		lines[i] = prefix + l
 	}
 	return strings.Join(lines, "\n")
+}
+
+func formatDataBadge(n int) string {
+	switch {
+	case n == 0:
+		return "· no entries yet"
+	case n == 1:
+		return "· grounded on 1 entry"
+	default:
+		return "· grounded on " + itoa(n) + " entries"
+	}
 }
